@@ -1,0 +1,18 @@
+[package]
+authors = ["Sean Leffler <sean@errno.com>"]
+name = "rad"
+version = "0.1.0"
+
+[dependencies]
+ceph-rust = "0.1.16"
+chrono = "0.3.1"
+error-chain = "0.10.0"
+futures = "0.1.14"
+libc = "0.2.23"
+void = "1.0.2"
+
+[dependencies.as-ptr]
+path = "../as-ptr-rs/"
+
+[features]
+integration-tests = []
