@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
 
@@ -8,7 +9,7 @@ use super::connect_to_cluster;
 #[test]
 fn read_write_remove() {
     let cluster = connect_to_cluster().unwrap();
-    let pool = cluster.get_pool_context("rbd").unwrap();
+    let pool = cluster.get_pool_context(c!("rbd")).unwrap();
 
     let mut test_blobs = Vec::new();
 
@@ -26,7 +27,7 @@ fn read_write_remove() {
         file.read_to_end(&mut bytes).unwrap();
 
         println!("Writing to Ceph...");
-        pool.write_full(&file_name, &bytes)
+        pool.write_full(CString::new(file_name).unwrap(), &bytes)
             .unwrap();
 
         println!("{} bytes written.", bytes.len());
@@ -35,24 +36,24 @@ fn read_write_remove() {
     }
 
     for i in 0..5 {
-        let file_name = format!("test_file{}", i);
+        let file_name = CString::new(format!("test_file{}", i)).unwrap();
 
         println!("Reading test_file{} from Ceph...", i);
 
         let mut buf = Vec::new();
-        pool.read_full(&file_name, &mut buf).unwrap();
+        pool.read_full(&*file_name, &mut buf).unwrap();
 
         println!("{} bytes read.", buf.len());
 
         assert!(test_blobs[i] == buf);
 
-        pool.remove(&file_name).unwrap();
+        pool.remove(file_name).unwrap();
     }
 
     for i in 0..5 {
-        let file_name = format!("test_file{}", i);
+        let file_name = CString::new(format!("test_file{}", i)).unwrap();
 
-        let stat = pool.stat(&file_name);
+        let stat = pool.stat(file_name);
 
         assert!(stat.is_err());
     }

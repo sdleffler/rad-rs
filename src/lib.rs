@@ -8,6 +8,7 @@ extern crate futures;
 extern crate libc;
 
 
+#[macro_export]
 macro_rules! c {
     ($s:expr) => {
         CString::new($s)

@@ -1,10 +1,12 @@
 #[cfg(feature = "integration-tests")]
+#[macro_use]
 extern crate rad;
 
 
 #[cfg(feature = "integration-tests")]
 mod integration {
     use std::env;
+    use std::ffi::CString;
 
     use rad::{self, RadosConnectionBuilder, RadosCluster};
 
@@ -20,9 +22,9 @@ mod integration {
         let mut ceph_keyring = ceph;
         ceph_keyring.push("ceph.client.admin.keyring");
 
-        RadosConnectionBuilder::with_user("admin")?
-            .read_conf_file(ceph_conf)?
-            .conf_set("keyring", ceph_keyring.to_str().unwrap())?
+        RadosConnectionBuilder::with_user(c!("admin"))?
+            .read_conf_file(CString::new(ceph_conf.to_str().unwrap()).unwrap())?
+            .conf_set(c!("keyring"), CString::new(ceph_keyring.to_str().unwrap()).unwrap())?
             .connect()
     }
 
