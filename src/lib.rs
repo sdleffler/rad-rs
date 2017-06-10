@@ -8,11 +8,17 @@ extern crate futures;
 extern crate libc;
 
 
+macro_rules! c {
+    ($s:expr) => {
+        CString::new($s)
+            .expect(concat!("Could not convert `", $s, "` to an FFI-compatible CString!"))
+    };
+}
+
+
 pub mod async;
-mod errors;
-mod into_ffi;
+pub mod errors;
 pub mod rados;
 
 pub use errors::*;
-pub use into_ffi::*;
 pub use rados::{RadosConnectionBuilder, RadosCluster, RadosContext, RadosStat};
