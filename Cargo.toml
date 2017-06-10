@@ -11,8 +11,5 @@ futures = "0.1.14"
 libc = "0.2.23"
 void = "1.0.2"
 
-[dependencies.as-ptr]
-path = "../as-ptr-rs/"
-
 [features]
 integration-tests = []

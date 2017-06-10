@@ -3,7 +3,6 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
 
-use as_ptr::AsPtr;
 use ceph_rust::rados::{self, rados_t, rados_ioctx_t, Struct_rados_cluster_stat_t};
 use chrono::{DateTime, Local, TimeZone};
 use libc::{c_char, time_t, ENOENT};
@@ -45,7 +44,7 @@ impl RadosConnectionBuilder {
         let c_user = user.into_ffi_string()
             .expect("error while converting user string into a C-compatible string!");
 
-        let err = unsafe { rados::rados_create(&mut handle, c_user.as_ptr()) };
+        let err = unsafe { rados::rados_create(&mut handle, c_user.as_ref().as_ptr()) };
 
         if err < 0 {
             Err(ErrorKind::CreateClusterHandleFailed(c_user.into_rust_string()?.into(),
@@ -61,7 +60,7 @@ impl RadosConnectionBuilder {
         let c_path = path.into_ffi_string()
             .expect("error while converting path into a C-compatible string!");
 
-        let err = unsafe { rados::rados_conf_read_file(self.handle, c_path.as_ptr()) };
+        let err = unsafe { rados::rados_conf_read_file(self.handle, c_path.as_ref().as_ptr()) };
 
         if err < 0 {
             Err(ErrorKind::ReadConfFromFileFailed(c_path.into_rust_string()?.into(),
@@ -85,7 +84,7 @@ impl RadosConnectionBuilder {
             .expect("error while converting value into a C-compatible string!");
 
         let err =
-            unsafe { rados::rados_conf_set(self.handle, c_option.as_ptr(), c_value.as_ptr()) };
+            unsafe { rados::rados_conf_set(self.handle, c_option.as_ref().as_ptr(), c_value.as_ref().as_ptr()) };
 
         if err < 0 {
             Err(ErrorKind::ConfSetFailed(c_option.into_rust_string()?.into(),
@@ -168,7 +167,7 @@ impl RadosCluster {
                 .expect("error while converting pool name into a C-compatible string!");
 
         let err = unsafe {
-            rados::rados_ioctx_create(self.handle, c_pool_name.as_ptr(), &mut ioctx_handle)
+            rados::rados_ioctx_create(self.handle, c_pool_name.as_ref().as_ptr(), &mut ioctx_handle)
         };
 
         if err < 0 {
@@ -237,8 +236,8 @@ impl<'a> RadosContext<'a> {
 
         let err = unsafe {
             rados::rados_getxattr(self.handle,
-                                  c_obj.as_ptr(),
-                                  c_key.as_ptr(),
+                                  c_obj.as_ref().as_ptr(),
+                                  c_key.as_ref().as_ptr(),
                                   buf.as_mut_ptr() as *mut c_char,
                                   buf.len())
         };
@@ -266,8 +265,8 @@ impl<'a> RadosContext<'a> {
 
         let err = unsafe {
             rados::rados_setxattr(self.handle,
-                                  c_obj.as_ptr(),
-                                  c_key.as_ptr(),
+                                  c_obj.as_ref().as_ptr(),
+                                  c_key.as_ref().as_ptr(),
                                   value.as_ptr() as *const c_char,
                                   value.len())
         };
@@ -291,7 +290,7 @@ impl<'a> RadosContext<'a> {
 
         let err = unsafe {
             rados::rados_write(self.handle,
-                               c_obj.as_ptr(),
+                               c_obj.as_ref().as_ptr(),
                                buf.as_ptr() as *const c_char,
                                buf.len(),
                                offset)
@@ -316,7 +315,7 @@ impl<'a> RadosContext<'a> {
 
         let err = unsafe {
             rados::rados_write_full(self.handle,
-                                    c_obj.as_ptr(),
+                                    c_obj.as_ref().as_ptr(),
                                     buf.as_ptr() as *const c_char,
                                     buf.len())
         };
@@ -339,7 +338,7 @@ impl<'a> RadosContext<'a> {
 
         let err = unsafe {
             rados::rados_append(self.handle,
-                                c_obj.as_ptr(),
+                                c_obj.as_ref().as_ptr(),
                                 buf.as_ptr() as *const c_char,
                                 buf.len())
         };
@@ -362,7 +361,7 @@ impl<'a> RadosContext<'a> {
 
         let err = unsafe {
             rados::rados_read(self.handle,
-                              c_obj.as_ptr(),
+                              c_obj.as_ref().as_ptr(),
                               buf.as_mut_ptr() as *mut c_char,
                               buf.len(),
                               offset)
@@ -391,7 +390,7 @@ impl<'a> RadosContext<'a> {
         let mut offset = 0;
 
         let ffi_obj = obj.into_ffi_string()?;
-        let c_obj = unsafe { CStr::from_ptr(ffi_obj.as_ptr()) };
+        let c_obj = unsafe { CStr::from_ptr(ffi_obj.as_ref().as_ptr()) };
 
         loop {
             res = self.read(c_obj, &mut buf, offset as u64);
@@ -417,7 +416,7 @@ impl<'a> RadosContext<'a> {
     pub fn remove<T: IntoFfiString>(&self, obj: T) -> Result<()> {
         let c_obj = obj.into_ffi_string()?;
 
-        let err = unsafe { rados::rados_remove(self.handle, c_obj.as_ptr()) };
+        let err = unsafe { rados::rados_remove(self.handle, c_obj.as_ref().as_ptr()) };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(err));
@@ -433,7 +432,7 @@ impl<'a> RadosContext<'a> {
     pub fn resize<T: IntoFfiString>(&self, obj: T, size: u64) -> Result<()> {
         let c_obj = obj.into_ffi_string()?;
 
-        let err = unsafe { rados::rados_trunc(self.handle, c_obj.as_ptr(), size) };
+        let err = unsafe { rados::rados_trunc(self.handle, c_obj.as_ref().as_ptr(), size) };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(err));
@@ -454,7 +453,7 @@ impl<'a> RadosContext<'a> {
         let mut size: u64 = 0;
         let mut time: time_t = 0;
 
-        let err = unsafe { rados::rados_stat(self.handle, c_obj.as_ptr(), &mut size, &mut time) };
+        let err = unsafe { rados::rados_stat(self.handle, c_obj.as_ref().as_ptr(), &mut size, &mut time) };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(err));
@@ -478,7 +477,7 @@ impl<'a> RadosContext<'a> {
                                          -> Result<RadosFuture<RadosFinishWrite>> {
         let c_obj = obj.into_ffi_string()?;
 
-        let c_obj_ptr = c_obj.as_ptr();
+        let c_obj_ptr = c_obj.as_ref().as_ptr();
 
         let write_info = RadosFinishWrite {
             oid: c_obj.into_rust_string().unwrap().into(),
@@ -512,7 +511,7 @@ impl<'a> RadosContext<'a> {
                                           -> Result<RadosFuture<RadosFinishAppend>> {
         let c_obj = obj.into_ffi_string()?;
 
-        let c_obj_ptr = c_obj.as_ptr();
+        let c_obj_ptr = c_obj.as_ref().as_ptr();
 
         let append_info = RadosFinishAppend {
             oid: c_obj.into_rust_string().unwrap().into(),
@@ -544,7 +543,7 @@ impl<'a> RadosContext<'a> {
                                               -> Result<RadosFuture<RadosFinishFullWrite>> {
         let c_obj = obj.into_ffi_string()?;
 
-        let c_obj_ptr = c_obj.as_ptr();
+        let c_obj_ptr = c_obj.as_ref().as_ptr();
 
         let full_write_info = RadosFinishFullWrite {
             oid: c_obj.into_rust_string().unwrap().into(),
@@ -575,7 +574,7 @@ impl<'a> RadosContext<'a> {
                                           -> Result<RadosFuture<RadosFinishRemove>> {
         let c_obj = obj.into_ffi_string()?;
 
-        let c_obj_ptr = c_obj.as_ptr();
+        let c_obj_ptr = c_obj.as_ref().as_ptr();
 
         let remove_info = RadosFinishRemove { oid: c_obj.into_rust_string().unwrap().into() };
 
@@ -599,7 +598,7 @@ impl<'a> RadosContext<'a> {
          -> Result<RadosFuture<RadosFinishRead<'buf>>> {
         let c_obj = obj.into_ffi_string()?;
 
-        let c_obj_ptr = c_obj.as_ptr();
+        let c_obj_ptr = c_obj.as_ref().as_ptr();
 
         let buf_ptr = buf.as_mut_ptr() as *mut c_char;
         let buf_len = buf.len();
@@ -632,7 +631,7 @@ impl<'a> RadosContext<'a> {
     pub fn stat_async<T: IntoFfiString>(&self, obj: T) -> Result<RadosFuture<RadosFinishStat>> {
         let c_obj = obj.into_ffi_string()?;
 
-        let c_obj_ptr = c_obj.as_ptr();
+        let c_obj_ptr = c_obj.as_ref().as_ptr();
 
         let mut boxed = Box::new((0, 0));
 
@@ -667,7 +666,7 @@ impl<'a> RadosContext<'a> {
         let mut size: u64 = 0;
         let mut time: time_t = 0;
 
-        let err = unsafe { rados::rados_stat(self.handle, c_obj.as_ptr(), &mut size, &mut time) };
+        let err = unsafe { rados::rados_stat(self.handle, c_obj.as_ref().as_ptr(), &mut size, &mut time) };
 
         if -err == ENOENT {
             Ok(false)
@@ -685,7 +684,7 @@ impl<'a> RadosContext<'a> {
     pub fn exists_async<T: IntoFfiString>(&self, obj: T) -> Result<RadosFuture<RadosFinishExists>> {
         let c_obj = obj.into_ffi_string()?;
 
-        let c_obj_ptr = c_obj.as_ptr();
+        let c_obj_ptr = c_obj.as_ref().as_ptr();
 
         let mut boxed = Box::new((0, 0));
 

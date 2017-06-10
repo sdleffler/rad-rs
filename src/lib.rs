@@ -1,6 +1,5 @@
 #![recursion_limit = "1024"]
 
-extern crate as_ptr;
 extern crate ceph_rust;
 extern crate chrono;
 #[macro_use]

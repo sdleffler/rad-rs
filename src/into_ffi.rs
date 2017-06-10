@@ -1,9 +1,6 @@
 use std::ffi::{CString, CStr};
 use std::path::PathBuf;
 
-use as_ptr::AsPtr;
-use libc::c_char;
-
 use errors::{ErrorKind, Result};
 
 
@@ -57,7 +54,7 @@ impl<'a> IntoRustString for &'a CStr {
 /// A type which can be converted, efficiently or not, into an FFI-compatible
 /// string.
 pub trait IntoFfiString {
-    type Ffi: AsPtr<c_char> + IntoRustString;
+    type Ffi: AsRef<CStr> + IntoRustString;
 
     fn into_ffi_string(self) -> Result<Self::Ffi>;
 }
