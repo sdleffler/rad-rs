@@ -21,7 +21,7 @@ The type returned from `.connect()` is a `RadosCluster` handle, which is a wrapp
 
 ## Writing a file to a cluster
 
-The following example shows how to write a file to a cluster using the `RadosWriter` wrapper, which implements the `Write` trait:
+The following example shows how to write a file to a cluster using the `RadosObject` wrapper, which implements the `Write` trait:
 
 ```rust
 use std::io::{BufReader, BufWriter};
