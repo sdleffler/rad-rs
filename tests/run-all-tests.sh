@@ -19,23 +19,43 @@ function get_subnet_mask() {
 
 # Start the ceph/demo docker container.
 function start_docker() {
-    local MACHINE_IP=$(get_local_ip)
-    local MACHINE_SUBNET_MASK=$(get_subnet_mask $MACHINE_IP)
+    local DOCKER0_SUBNET=`ip -o -f inet addr show | awk '/scope global docker0/ {print $4}'`
 
-    echo "Detected machine IP: ${MACHINE_IP}"
-    echo "Detected subnet mask: ${MACHINE_SUBNET_MASK}"
+    echo "Building container..."
+
+    local DOCKER_CONTAINER=`docker build ceph-test-docker | awk '/Successfully built/ { print $3 }'`
+
+    docker ps
 
     # We store the running docker container's ID into the temporary file `.tmp_tc_name`
     # so that we can remember it through subshells and in case something goes wrong
     # and the docker container isn't stopped (i.e. Ctrl-C during running tests.)
-    docker run -d --rm --net=host -v $(pwd)/ceph:/etc/ceph \
-           -e CEPH_PUBLIC_NETWORK=$MACHINE_SUBNET_MASK \
-           -e MON_IP=$MACHINE_IP ceph/demo > .tmp_tc_name
+    local DOCKER_CMD=""
+    DOCKER_CMD+="docker run -d --rm --net=host -v $(pwd)/ceph:/etc/ceph "
+    DOCKER_CMD+="-e CEPH_PUBLIC_NETWORK=${DOCKER0_SUBNET} "
+    DOCKER_CMD+="-e MON_IP=127.0.0.1 "
+    DOCKER_CMD+="--entrypoint=/preentry.sh ${DOCKER_CONTAINER}"
 
+    $DOCKER_CMD > .tmp_tc_name
+    
     echo "Started Ceph demo container: $(cat .tmp_tc_name)"
     echo "Waiting for Ceph demo container to be ready for tests..."
 
+    docker ps
+
     ./do_until_success.sh "docker logs $(cat .tmp_tc_name) | grep -q '/entrypoint.sh: SUCCESS'" 2> /dev/null
+
+    echo "Attempting to fix permissions on /etc/ceph/ceph/client.admin.keyring from inside the container..."
+
+    # The devil's permissions for a total hack
+    docker exec $(cat .tmp_tc_name) chmod 666 /etc/ceph/ceph.client.admin.keyring
+    
+    echo "Done."
+    # if [[ ! -r ceph/ceph.client.admin.keyring || ! -w ceph/ceph.client.admin.keyring ]]; then
+    #     echo "ceph/ceph.client.admin.keyring exists, but has incorrect permissions."
+    #     echo "Attempting to run 'sudo chmod 644 ceph/ceph.client.admin.keyring' to fix this."
+    #     sudo chmod 644 ceph/ceph.client.admin.keyring
+    # fi
 }
 
 # Stop the last running ceph/demo docker container.
@@ -52,6 +72,7 @@ function setup() {
             echo "Previous docker container appears to still be running: $(cat .tmp_tc_name)"
             stop_docker
         fi
+
         start_docker
     )
 }
