@@ -20,6 +20,7 @@ macro_rules! c {
 pub mod async;
 pub mod errors;
 pub mod rados;
+pub mod stream;
 
 pub use errors::*;
 pub use rados::{RadosConnectionBuilder, RadosCluster, RadosContext, RadosStat};
