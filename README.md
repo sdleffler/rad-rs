@@ -1,3 +1,6 @@
+[![Docs Status](https://docs.rs/rad/badge.svg)](https://docs.rs/rad)
+[![On crates.io](https://img.shields.io/crates/v/rad.svg)](https://crates.io/crates/rad)
+
 # rad: High-level Rust library for interfacing with RADOS
 
 This library provides a typesafe and extremely high-level Rust interface to
