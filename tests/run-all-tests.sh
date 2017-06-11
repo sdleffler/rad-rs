@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 # Start the ceph/demo docker container.
 function start_docker() {
     local DOCKER0_SUBNET=`ip -o -f inet addr show | awk '/scope global docker0/ {print $4}'`
@@ -40,11 +39,38 @@ function stop_docker() {
     fi
 }
 
+# Fill test files with random ASCII.
+function make_test_files() {
+    for TEST_FILE in $@ 
+    do
+	base64 /dev/urandom | head -c 1M > $TEST_FILE
+    done
+
+    echo "$@" > .tmp_test_files
+}
+
+function cleanup_test_files() {
+    rm -f `cat .tmp_test_files` .tmp_test_files
+}
+
 # During setup, we kill the previous docker container if it's still running. Then,
 # start a new one.
 function setup() {
     (
         cd "$(dirname $0)"
+	
+	TEST_FILES=""
+
+	for N in {0..4}
+	do
+	    TEST_FILES+="integration/read_write_remove/test_file$N "
+	done
+
+	TEST_FILES+="integration/reader_writer/test_file.txt"
+
+	make_test_files $TEST_FILES
+
+
         if [[ -e .tmp_tc_name && ! -z $(cat .tmp_tc_name) ]]; then
             echo "Previous docker container appears to still be running: $(cat .tmp_tc_name)"
             stop_docker
@@ -60,7 +86,10 @@ function teardown() {
     (
         cd "$(dirname $0)"
         stop_docker
+
         rm -f .tmp_tc_name
+
+	cleanup_test_files
     )
 }
 
