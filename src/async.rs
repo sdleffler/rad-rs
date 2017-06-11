@@ -1,3 +1,6 @@
+//! Wrappers around `rados_completion_t`, providing a safe, futures-based API
+//! for asynchronous RADOS operations.
+
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Mutex;

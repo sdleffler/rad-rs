@@ -1,3 +1,48 @@
+//! Wrappers for Ceph cluster connections, Ceph I/O contexts, and associated operations.
+//!
+//! ## Connection building example
+//!
+//! The following example connects to a Ceph cluster using the `ceph.conf` file at
+//! `/etc/ceph/ceph.conf`, as the `admin` user, and setting the RADOS config `keyring`
+//! option to the value of `/etc/ceph/ceph.client.admin.keyring` (which is necessary
+//! for connecting to Ceph using config files/keyrings located on nonstandard paths.)
+//!
+//! ```rust,no_run
+//! let cluster = RadosConnectionBuilder::with_user(c!("admin"))?
+//!                   .read_conf_file(c!("/etc/ceph/ceph.conf"))?
+//!                   .conf_set(c!("keyring"), c!("/etc/ceph/ceph.client.admin.keyring"))?
+//!                   .connect()?;
+//! ```
+//!
+//! ## File writing example
+//!
+//! The following example shows how to write to a file, assuming you have already connected
+//! to a cluster.
+//!
+//! ```rust,no_run
+//! use std::io::{BufReader, BufWriter};
+//! 
+//! let cluster = ...;
+//! 
+//! let pool = cluster.get_pool_context(c!("rbd")).unwrap();
+//! let object = BufReader::new(pool.object(c!("test_file.obj")).unwrap());
+//! 
+//! let file = File::open("test_file.txt").unwrap();
+//! let reader = BufReader::new(file);
+//! 
+//! loop {
+//!     let buf = reader.fill_buf().unwrap();
+//!     
+//!     if buf.len() == 0 {
+//!         break;
+//!     }
+//! 
+//!     object.write(buf);
+//! }
+//! 
+//! object.flush().unwrap();
+//! ```
+
 use std::ffi::{CStr, CString};
 use std::marker::PhantomData;
 use std::ptr;

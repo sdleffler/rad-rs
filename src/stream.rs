@@ -1,3 +1,6 @@
+//! Wrappers implementing `Read`, `Write`, and `Seek` for doing I/O on individual
+//! RADOS objects.
+
 use std::ffi::{CStr, CString};
 use std::io::{self, SeekFrom, Read, Seek, Write};
 
