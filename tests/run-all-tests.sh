@@ -72,8 +72,6 @@ setup || {
     exit 1
 }
 
-echo "Successfully started Ceph demo container: $(cat .tmp_tc_name)"
-
 cargo test --features integration-tests $@ || {
     teardown
     exit 1
