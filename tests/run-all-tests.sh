@@ -1,21 +1,5 @@
 #!/bin/bash
 
-ceph_test_container=""
-
-# iirc, Ceph does not play well with loopback - so, we grab the local
-# address and use it for CEPH_PUBLIC_NETWORK/MON_IP.
-#
-# Get the local IP, using the route to the 8.8.8.8 DNS server to find the IP that
-# a machine is *actually using.*
-function get_local_ip() {
-    ip -o route get 8.8.8.8 | sed -e 's/^.* src \([^ ]*\) .*$/\1/'
-}
-
-# Given an IP, "calculate" the subnet mask. We grep in case there are multiple
-# valid ones.
-function get_subnet_mask() {
-    ip -o -f inet addr show | awk '/scope global/ {print $4}' | grep $1
-}
 
 # Start the ceph/demo docker container.
 function start_docker() {
@@ -24,8 +8,6 @@ function start_docker() {
     echo "Building container..."
 
     local DOCKER_CONTAINER=`docker build ceph-test-docker | awk '/Successfully built/ { print $3 }'`
-
-    docker ps
 
     # We store the running docker container's ID into the temporary file `.tmp_tc_name`
     # so that we can remember it through subshells and in case something goes wrong
@@ -41,26 +23,21 @@ function start_docker() {
     echo "Started Ceph demo container: $(cat .tmp_tc_name)"
     echo "Waiting for Ceph demo container to be ready for tests..."
 
-    docker ps
-
     ./do_until_success.sh "docker logs $(cat .tmp_tc_name) | grep -q '/entrypoint.sh: SUCCESS'" 2> /dev/null
 
-    echo "Attempting to fix permissions on /etc/ceph/ceph/client.admin.keyring from inside the container..."
+    echo "Attempting to fix permissions on ceph/ceph/client.admin.keyring from inside the container..."
 
     # The devil's permissions for a total hack
     docker exec $(cat .tmp_tc_name) chmod 666 /etc/ceph/ceph.client.admin.keyring
     
     echo "Done."
-    # if [[ ! -r ceph/ceph.client.admin.keyring || ! -w ceph/ceph.client.admin.keyring ]]; then
-    #     echo "ceph/ceph.client.admin.keyring exists, but has incorrect permissions."
-    #     echo "Attempting to run 'sudo chmod 644 ceph/ceph.client.admin.keyring' to fix this."
-    #     sudo chmod 644 ceph/ceph.client.admin.keyring
-    # fi
 }
 
 # Stop the last running ceph/demo docker container.
 function stop_docker() {
-    echo "Stopping docker container: $(docker kill $(cat .tmp_tc_name))"
+    if [[ -e .tmp_tc_name ]]; then
+	echo "Stopping docker container: $(docker kill $(cat .tmp_tc_name))"
+    fi
 }
 
 # During setup, we kill the previous docker container if it's still running. Then,
@@ -83,7 +60,7 @@ function teardown() {
     (
         cd "$(dirname $0)"
         stop_docker
-        rm .tmp_tc_name
+        rm -f .tmp_tc_name
     )
 }
 
@@ -97,9 +74,7 @@ setup || {
 
 echo "Successfully started Ceph demo container: $(cat .tmp_tc_name)"
 
-cargo test --features integration-tests || {
-    echo "In the case of a 'Permission denied' error connecting to the cluster,"
-    echo "it may be necessary to run 'chmod 644 ceph/ceph.client.admin.keyring'."
+cargo test --features integration-tests $@ || {
     teardown
     exit 1
 }

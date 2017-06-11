@@ -31,4 +31,5 @@ mod integration {
 
     mod connect;
     mod read_write_remove;
+    mod reader_writer;
 }

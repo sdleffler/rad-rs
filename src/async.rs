@@ -1,10 +1,12 @@
 use std::ffi::CString;
 use std::ptr;
+use std::sync::Mutex;
 
 use ceph_rust::rados::{self, rados_completion_t};
 use chrono::{Local, TimeZone};
 use futures::{Async, Future, Poll};
-use libc::{time_t, ENOENT};
+use futures::task::{self, Task};
+use libc::{c_void, time_t, ENOENT};
 
 use errors::{self, Error, ErrorKind, Result, get_error_string};
 use rados::RadosStat;
@@ -24,6 +26,36 @@ pub trait Finalize {
 }
 
 
+struct CompletionInfo {
+    caution: RadosCaution,
+    task: Mutex<Option<Task>>,
+}
+
+
+extern "C" fn complete_callback(_handle: rados_completion_t, info_ptr: *mut c_void) {
+    unsafe {
+        let info = &*(info_ptr as *const CompletionInfo);
+
+        match *info.task.lock().unwrap() {
+            Some(ref task) if info.caution == RadosCaution::Complete => task.notify(),
+            _ => {}
+        }
+    }
+}
+
+
+extern "C" fn safe_callback(_handle: rados_completion_t, info_ptr: *mut c_void) {
+    unsafe {
+        let info = &*(info_ptr as *const CompletionInfo);
+
+        match *info.task.lock().unwrap() {
+            Some(ref task) => task.notify(),
+            _ => {}
+        }
+    }
+}
+
+
 /// Asynchronous I/O through RADOS is abstracted behind the `RadosFuture` type.
 /// Different behaviors corresponding to different AIO operations are implemented
 /// as differing type parameters implementing `Finalize`. Use of the `Finalize`
@@ -33,7 +65,7 @@ pub trait Finalize {
 /// acknowledgement from the cluster or for the assurance that the operation has
 /// been committed to stable memory.)
 pub struct RadosFuture<F: Finalize> {
-    caution: RadosCaution,
+    info: Box<CompletionInfo>,
     finalize: Option<F>,
     handle: rados_completion_t,
 }
@@ -73,8 +105,17 @@ impl<F: Finalize> RadosFuture<F> {
     {
         let mut completion_handle = ptr::null_mut();
 
+        let mut info = Box::new(CompletionInfo {
+                                    task: Mutex::new(None),
+                                    caution,
+                                });
+        let info_ptr = info.as_mut() as *mut CompletionInfo;
+
         let err = unsafe {
-            rados::rados_aio_create_completion(ptr::null_mut(), None, None, &mut completion_handle)
+            rados::rados_aio_create_completion(info_ptr as *mut c_void,
+                                               Some(complete_callback),
+                                               Some(safe_callback),
+                                               &mut completion_handle)
         };
 
         if err < 0 {
@@ -82,7 +123,7 @@ impl<F: Finalize> RadosFuture<F> {
         } else {
             init(completion_handle).map(|()| {
                 RadosFuture {
-                    caution,
+                    info,
                     finalize: Some(finalize),
                     handle: completion_handle,
                 }
@@ -137,7 +178,12 @@ impl<F: Finalize> Future for RadosFuture<F> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<F::Output, Error> {
-        match (self.caution, self.get_error_value()) {
+        println!("Polling future with caution {:?}... Complete? {}; Safe? {}; Error value: {:?}",
+                 self.info.caution,
+                 self.is_complete(),
+                 self.is_safe(),
+                 self.get_error_value());
+        match (self.info.caution, self.get_error_value()) {
             // If `self.get_error_value()` is `Some`, an error has occurred. We
             // can only be certain that an error has occurred if the operation
             // has been acked or is safe, so we check to ensure that one of the
@@ -152,14 +198,17 @@ impl<F: Finalize> Future for RadosFuture<F> {
                 }
             }
 
-            (RadosCaution::Complete, None) if self.is_complete() => {
+            (RadosCaution::Complete, None) if self.is_complete() || self.is_safe() => {
                 Ok(Async::Ready(self.take_finalize().on_success()))
             }
             (RadosCaution::Safe, None) if self.is_safe() => {
                 Ok(Async::Ready(self.take_finalize().on_success()))
             }
 
-            _ => Ok(Async::NotReady),
+            _ => {
+                *self.info.task.lock().unwrap() = Some(task::current());
+                Ok(Async::NotReady)
+            }
         }
     }
 }
