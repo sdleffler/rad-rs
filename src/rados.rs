@@ -21,31 +21,31 @@
 //!
 //! ```rust,ignore
 //! use std::io::{BufReader, BufWriter};
-//! 
+//!
 //! let cluster = ...;
-//! 
+//!
 //! let pool = cluster.get_pool_context(c!("rbd")).unwrap();
 //! let object = BufReader::new(pool.object(c!("test_file.obj")).unwrap());
-//! 
+//!
 //! let file = File::open("test_file.txt").unwrap();
 //! let reader = BufReader::new(file);
-//! 
+//!
 //! loop {
 //!     let buf = reader.fill_buf().unwrap();
-//!     
+//!
 //!     if buf.len() == 0 {
 //!         break;
 //!     }
-//! 
+//!
 //!     object.write(buf);
 //! }
-//! 
+//!
 //! object.flush().unwrap();
 //! ```
 
 use std::ffi::{CStr, CString};
-use std::marker::PhantomData;
 use std::ptr;
+use std::sync::Arc;
 
 use ceph_rust::rados::{self, rados_t, rados_ioctx_t, Struct_rados_cluster_stat_t};
 use chrono::{DateTime, Local, TimeZone};
@@ -141,19 +141,19 @@ impl RadosConnectionBuilder {
 
 
     /// Finish building the connection configuration and connect to the cluster.
-    pub fn connect(self) -> Result<RadosCluster> {
+    pub fn connect(self) -> Result<RadosConnection> {
         let err = unsafe { rados::rados_connect(self.handle) };
 
         if err < 0 {
             Err(ErrorKind::ConnectFailed(try!(errors::get_error_string(-err as u32))).into())
         } else {
-            Ok(RadosCluster { handle: self.handle })
+            Ok(RadosConnection { _dummy: ptr::null(), conn: Arc::new(RadosHandle { handle: self.handle }) })
         }
     }
 }
 
 
-/// Statistics for a full Ceph cluster: total storage in kilobytes, the amount of storage used in
+/// Statistics for a Ceph cluster: total storage in kilobytes, the amount of storage used in
 /// kilobytes, the amount of available storage in kilobytes, and the number of stored objects.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RadosClusterStat {
@@ -168,12 +168,13 @@ pub struct RadosClusterStat {
 /// cluster.
 ///
 /// On drop, `rados_shutdown` is called on the wrapped `rados_t`.
-pub struct RadosCluster {
+#[derive(Clone)]
+struct RadosHandle {
     handle: rados_t,
 }
 
 
-impl Drop for RadosCluster {
+impl Drop for RadosHandle {
     fn drop(&mut self) {
         unsafe {
             rados::rados_shutdown(self.handle);
@@ -182,7 +183,43 @@ impl Drop for RadosCluster {
 }
 
 
-impl RadosCluster {
+// `Send` and `Sync` are unsafely implemented for `RadosHandle` because it is only ever *used* in a
+// thread-safe manner, and needs to be able to be sent across threads. The rationale for this is as
+// follows: we wish to (atomically) reference-count the handle for the connection to the Ceph
+// cluster, so that we can call `rados_shutdown` on it as necessary. RADOS I/O contexts count as
+// references against the underlying connection, because if the underlying connection is shut down,
+// the I/O contexts become invalid [citation needed]. As such, we give I/O contexts
+// `Arc<RadosHandle>`s, which are never actually accessed but instead only used for the reference
+// count. The actual `RadosConnection` struct - which *does* call functions on the underlying
+// `RadosHandle` and `rados_t` - is neither `Clone` nor `Send` nor `Sync`; and as such, will only
+// ever be accessed single-threadedly, making it safe. Thus, since the underlying `rados_t` will
+// only ever be accessed single-threadedly (as it is *never* accessed through the references kept
+// in I/O contexts) it is completely safe to give it `Send` and `Sync` capabilities.
+unsafe impl Send for RadosHandle {}
+unsafe impl Sync for RadosHandle {}
+
+
+/// A wrapper over a connection to a Ceph cluster.
+pub struct RadosConnection {
+    // Since opt-in builtin traits are not yet stable, use of a dummy pointer will prevent
+    // `RadosConnection` from being `Send` or `Sync`.
+    _dummy: *const (),
+
+    // Although `RadosConnection` isn't cloneable, since we still need to reference-count the
+    // underlying cluster connection handle, we use an `Arc` and on creation of I/O contexts we
+    // clone the `Arc` and give a reference to each I/O context. This allows us to `rados_shutdown`
+    // the cluster once all references are dropped.
+    conn: Arc<RadosHandle>,
+}
+
+
+// OIBITs not yet stable.
+//
+// impl !Send for RadosConnection {}
+// impl !Sync for RadosConnection {}
+
+
+impl RadosConnection {
     /// Fetch the stats of the entire cluster, using `rados_cluster_stat`.
     pub fn stat(&self) -> Result<RadosClusterStat> {
         let mut cluster_stat = Struct_rados_cluster_stat_t {
@@ -192,7 +229,7 @@ impl RadosCluster {
             num_objects: 0,
         };
 
-        let err = unsafe { rados::rados_cluster_stat(self.handle, &mut cluster_stat) };
+        let err = unsafe { rados::rados_cluster_stat(self.conn.handle, &mut cluster_stat) };
 
         if err < 0 {
             Err(ErrorKind::ClusterStatFailed(try!(errors::get_error_string(-err as u32))).into())
@@ -208,13 +245,13 @@ impl RadosCluster {
 
 
     /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create`.
-    pub fn get_pool_context<'a, T: AsRef<CStr> + Into<CString>>(&'a self,
+    pub fn get_pool_context<T: AsRef<CStr> + Into<CString>>(&self,
                                                                 pool_name: T)
-                                                                -> Result<RadosContext<'a>> {
+                                                                -> Result<RadosContext> {
         let mut ioctx_handle = ptr::null_mut();
 
         let err = unsafe {
-            rados::rados_ioctx_create(self.handle, pool_name.as_ref().as_ptr(), &mut ioctx_handle)
+            rados::rados_ioctx_create(self.conn.handle, pool_name.as_ref().as_ptr(), &mut ioctx_handle)
         };
 
         if err < 0 {
@@ -223,7 +260,7 @@ impl RadosCluster {
                         .into())
         } else {
             Ok(RadosContext {
-                   conn: PhantomData,
+                   _conn: self.conn.clone(),
                    handle: ioctx_handle,
                })
         }
@@ -231,11 +268,11 @@ impl RadosCluster {
 
 
     /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create2`.
-    pub fn get_pool_context_from_id<'a>(&'a self, pool_id: u64) -> Result<RadosContext<'a>> {
+    pub fn get_pool_context_from_id(&self, pool_id: u64) -> Result<RadosContext> {
         let mut ioctx_handle = ptr::null_mut();
 
         let err = unsafe {
-            rados::rados_ioctx_create2(self.handle,
+            rados::rados_ioctx_create2(self.conn.handle,
                                        *(&pool_id as *const u64 as *const i64),
                                        &mut ioctx_handle)
         };
@@ -248,7 +285,7 @@ impl RadosCluster {
                         .into())
         } else {
             Ok(RadosContext {
-                   conn: PhantomData,
+                   _conn: self.conn.clone(),
                    handle: ioctx_handle,
                })
         }
@@ -264,17 +301,15 @@ pub struct RadosStat {
 }
 
 
-/// A wrapper around a `rados_ioctx_t`. It contains a phantom
-/// reference to the `rados_ioctx_t` it came from in order to ensure that all
-/// `rados_ioctx_t` objects are freed before the parent `rados_t` is
-/// `rados_shutdown`.
-pub struct RadosContext<'a> {
-    conn: PhantomData<&'a RadosCluster>,
+/// A wrapper around a `rados_ioctx_t`, which also counts as a reference to the underlying
+/// `RadosConnection`.
+pub struct RadosContext {
+    _conn: Arc<RadosHandle>,
     handle: rados_ioctx_t,
 }
 
 
-impl<'a> Drop for RadosContext<'a> {
+impl Drop for RadosContext {
     fn drop(&mut self) {
         unsafe {
             rados::rados_ioctx_destroy(self.handle);
@@ -283,7 +318,7 @@ impl<'a> Drop for RadosContext<'a> {
 }
 
 
-impl<'a> RadosContext<'a> {
+impl RadosContext {
     /// Fetch an extended attribute on a given RADOS object using `rados_getxattr`.
     pub fn get_xattr<T, U>(&self, obj: T, key: U) -> Result<Vec<u8>>
         where T: AsRef<CStr> + Into<CString>,
@@ -420,7 +455,7 @@ impl<'a> RadosContext<'a> {
 
     /// The current implementation of `read_full` is very inefficient and just a placeholder -
     /// eventually `read_full` should use asynchronous I/O instead of synchronously waiting for
-    /// *every* single requested block. 
+    /// *every* single requested block.
     ///
     /// TODO: read in the length with `RadosContext::stat` and then asynchronously read chunks.
     pub fn read_full<T>(&self, obj: T, vec: &mut Vec<u8>) -> Result<usize>
@@ -798,7 +833,7 @@ impl<'a> RadosContext<'a> {
 
     /// This function is a convenient wrapper around `RadosContext::object_with_caution` which uses
     /// a default caution value of `RadosCaution::Complete`.
-    pub fn object<T>(self, obj: T) -> RadosObject<'a>
+    pub fn object<T>(self, obj: T) -> RadosObject
         where T: AsRef<CStr> + Into<CString>
     {
         self.object_with_caution(RadosCaution::Complete, obj)
@@ -808,7 +843,7 @@ impl<'a> RadosContext<'a> {
     /// Get a wrapper for a given object which implements `Read`, `Write`, and `Seek`.  Write
     /// operations are done asynchronously; reads synchronously, and `Seek` only runs a librados
     /// operation in the case of `SeekFrom::End`.
-    pub fn object_with_caution<T>(self, caution: RadosCaution, obj: T) -> RadosObject<'a>
+    pub fn object_with_caution<T>(self, caution: RadosCaution, obj: T) -> RadosObject
         where T: AsRef<CStr> + Into<CString>
     {
         RadosObject::new(self, caution.into(), obj.into())

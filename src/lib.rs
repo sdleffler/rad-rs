@@ -45,4 +45,4 @@ pub mod rados;
 pub mod stream;
 
 pub use errors::*;
-pub use rados::{RadosConnectionBuilder, RadosCluster, RadosContext, RadosStat};
+pub use rados::{RadosConnectionBuilder, RadosConnection, RadosContext, RadosStat};

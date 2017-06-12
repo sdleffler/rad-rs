@@ -8,10 +8,10 @@ mod integration {
     use std::env;
     use std::ffi::CString;
 
-    use rad::{self, RadosConnectionBuilder, RadosCluster};
+    use rad::{self, RadosConnectionBuilder, RadosConnection};
 
 
-    fn connect_to_cluster() -> rad::Result<RadosCluster> {
+    fn connect_to_cluster() -> rad::Result<RadosConnection> {
         let mut ceph = env::current_dir().unwrap();
         ceph.push("tests");
         ceph.push("ceph");
