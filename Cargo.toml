@@ -1,21 +1,15 @@
 [package]
 authors = ["Sean Leffler <sean@errno.com>"]
-name = "rad"
-version = "0.1.0"
-
+categories = ["api-bindings", "asynchronous", "concurrency", "database"]
 description = "A type-safe, high-level interface to librados using the low-level C bindings from ceph-rust."
-
 documentation = "https://docs.rs/rad/"
 homepage = "https://github.com/sdleffler/rad-rs/"
-repository = "https://github.com/sdleffler/rad-rs/"
-
-readme = "README.md"
-
 keywords = ["librados", "rados", "ceph", "safe", "storage"]
-
-categories = ["api-bindings", "asynchronous", "concurrency", "database"]
-
 license = "MPL-2.0"
+name = "rad"
+readme = "README.md"
+repository = "https://github.com/sdleffler/rad-rs/"
+version = "0.1.1"
 
 [dependencies]
 ceph-rust = "0.1.16"
