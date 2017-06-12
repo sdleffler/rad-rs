@@ -7,7 +7,7 @@
 //! option to the value of `/etc/ceph/ceph.client.admin.keyring` (which is necessary
 //! for connecting to Ceph using config files/keyrings located on nonstandard paths.)
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! let cluster = RadosConnectionBuilder::with_user(c!("admin"))?
 //!                   .read_conf_file(c!("/etc/ceph/ceph.conf"))?
 //!                   .conf_set(c!("keyring"), c!("/etc/ceph/ceph.client.admin.keyring"))?
@@ -19,7 +19,7 @@
 //! The following example shows how to write to a file, assuming you have already connected
 //! to a cluster.
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use std::io::{BufReader, BufWriter};
 //! 
 //! let cluster = ...;
@@ -61,16 +61,15 @@ use stream::RadosObject;
 pub const RADOS_READ_BUFFER_SIZE: usize = 4096;
 
 
-/// `RadosConnectionBuilder` is a wrapper around a `rados_t` providing methods
-/// for configuring the connection before finalizing it.
+/// A wrapper around a `rados_t` providing methods for configuring the connection before finalizing
+/// it.
 pub struct RadosConnectionBuilder {
     handle: rados_t,
 }
 
 
 impl RadosConnectionBuilder {
-    /// Start building a new connection. By default the client to connect as is
-    /// `client.admin`.
+    /// Start building a new connection. By default the client to connect as is `client.admin`.
     pub fn new() -> Result<RadosConnectionBuilder> {
         let mut handle = ptr::null_mut();
 
@@ -102,7 +101,7 @@ impl RadosConnectionBuilder {
     }
 
 
-    /// Use librados to read a configuration file from a given path.
+    /// Read a configuration file from a given path.
     pub fn read_conf_file<T: AsRef<CStr> + Into<CString>>(self,
                                                           path: T)
                                                           -> Result<RadosConnectionBuilder> {
@@ -118,9 +117,8 @@ impl RadosConnectionBuilder {
     }
 
 
-    /// Set an individual configuration option. Useful options include `keyring`
-    /// if you are trying to set up Ceph without storing everything inside
-    /// `/etc/ceph`.
+    /// Set an individual configuration option. Useful options include `keyring` if you are trying
+    /// to set up Ceph without storing everything inside `/etc/ceph`.
     pub fn conf_set<T, U>(self, option: T, value: U) -> Result<RadosConnectionBuilder>
         where T: AsRef<CStr> + Into<CString>,
               U: AsRef<CStr> + Into<CString>
@@ -155,9 +153,8 @@ impl RadosConnectionBuilder {
 }
 
 
-/// Statistics for a full Ceph cluster: total storage in kilobytes, the amount
-/// of storage used in kilobytes, the amount of available storage in kilobytes,
-/// and the number of stored objects.
+/// Statistics for a full Ceph cluster: total storage in kilobytes, the amount of storage used in
+/// kilobytes, the amount of available storage in kilobytes, and the number of stored objects.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RadosClusterStat {
     pub kb: u64,
@@ -167,8 +164,8 @@ pub struct RadosClusterStat {
 }
 
 
-/// `RadosCluster` is a wrapper over a `rados_t` which is guaranteed to have
-/// successfully connected to a cluster.
+/// A wrapper over a `rados_t` which is guaranteed to have successfully connected to a
+/// cluster.
 ///
 /// On drop, `rados_shutdown` is called on the wrapped `rados_t`.
 pub struct RadosCluster {
@@ -186,8 +183,7 @@ impl Drop for RadosCluster {
 
 
 impl RadosCluster {
-    /// [Synchronously] fetch the stats of the entire cluster, using
-    /// `rados_cluster_stat`.
+    /// Fetch the stats of the entire cluster, using `rados_cluster_stat`.
     pub fn stat(&self) -> Result<RadosClusterStat> {
         let mut cluster_stat = Struct_rados_cluster_stat_t {
             kb: 0,
@@ -211,8 +207,7 @@ impl RadosCluster {
     }
 
 
-    /// Fetch the `rados_ioctx_t` for the relevant pool,
-    /// using `rados_ioctx_create`.
+    /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create`.
     pub fn get_pool_context<'a, T: AsRef<CStr> + Into<CString>>(&'a self,
                                                                 pool_name: T)
                                                                 -> Result<RadosContext<'a>> {
@@ -235,8 +230,7 @@ impl RadosCluster {
     }
 
 
-    /// Fetch the `rados_ioctx_t` for the relevant pool, using
-    /// `rados_ioctx_create2`.
+    /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create2`.
     pub fn get_pool_context_from_id<'a>(&'a self, pool_id: u64) -> Result<RadosContext<'a>> {
         let mut ioctx_handle = ptr::null_mut();
 
@@ -270,7 +264,7 @@ pub struct RadosStat {
 }
 
 
-/// `RadosContext` is a wrapper around a `rados_ioctx_t`. It contains a phantom
+/// A wrapper around a `rados_ioctx_t`. It contains a phantom
 /// reference to the `rados_ioctx_t` it came from in order to ensure that all
 /// `rados_ioctx_t` objects are freed before the parent `rados_t` is
 /// `rados_shutdown`.
@@ -424,9 +418,11 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// The current implementation of `read_full` is very inefficient and just a
-    /// placeholder - eventually `read_full` should use asynchronous I/O instead
-    /// of synchronously waiting for *every* single requested block. Very slow!
+    /// The current implementation of `read_full` is very inefficient and just a placeholder -
+    /// eventually `read_full` should use asynchronous I/O instead of synchronously waiting for
+    /// *every* single requested block. 
+    ///
+    /// TODO: read in the length with `RadosContext::stat` and then asynchronously read chunks.
     pub fn read_full<T>(&self, obj: T, vec: &mut Vec<u8>) -> Result<usize>
         where T: AsRef<CStr> + Into<CString>
     {
@@ -580,8 +576,7 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// Asynchronously set the contents of a RADOS object using
-    /// `rados_aio_write_full`.
+    /// Asynchronously set the contents of a RADOS object using `rados_aio_write_full`.
     pub fn write_full_async<T>(&self,
                                caution: RadosCaution,
                                obj: T,
@@ -643,8 +638,8 @@ impl<'a> RadosContext<'a> {
 
     /// Asynchronously read a RADOS object using `rados_aio_read`.
     ///
-    /// Since this function takes a mutable reference to the relevant buffer,
-    /// the future must live as long as the buffer you are reading into.
+    /// Since this function takes a mutable reference to the relevant buffer, the future must live
+    /// as long as the buffer you are reading into.
     pub fn read_async<'ctx, 'buf, T>(&'ctx self,
                                      obj: T,
                                      buf: &'buf mut [u8],
@@ -684,8 +679,7 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// Asynchronously fetch the statistics of a RADOS object using
-    /// `rados_aio_stat`.
+    /// Asynchronously fetch the statistics of a RADOS object using `rados_aio_stat`.
     pub fn stat_async<T>(&self, obj: T) -> Result<RadosFuture<RadosFinishStat>>
         where T: AsRef<CStr> + Into<CString>
     {
@@ -717,8 +711,8 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// Check whether or not a RADOS object exists under a given name, using
-    /// `rados_stat` and checking the error code for `ENOENT`.
+    /// Check whether or not a RADOS object exists under a given name, using `rados_stat` and
+    /// checking the error code for `ENOENT`.
     pub fn exists<T>(&self, obj: T) -> Result<bool>
         where T: AsRef<CStr> + Into<CString>
     {
@@ -740,8 +734,8 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// Asynchronously check for RADOS object existence using `rados_aio_stat`
-    /// and checking the error code for `ENOENT`.
+    /// Asynchronously check for RADOS object existence using `rados_aio_stat` and checking the
+    /// error code for `ENOENT`.
     pub fn exists_async<T: AsRef<CStr> + Into<CString>>
         (&self,
          obj: T)
@@ -769,8 +763,7 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// Flush all asynchronous I/O actions on the given context, blocking until
-    /// they are complete.
+    /// Flush all asynchronous I/O actions on the given context, blocking until they are complete.
     pub fn flush(&self) -> Result<()> {
         // BUG: `rados_aio_flush` always returns 0
         // http://docs.ceph.com/docs/master/rados/api/librados/#rados_aio_flush
@@ -788,8 +781,8 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// Asynchronously flush all asynchronous I/O actions on the given context.
-    /// The resulting future will complete when all I/O actions are complete.
+    /// Asynchronously flush all asynchronous I/O actions on the given context.  The resulting
+    /// future will complete when all I/O actions are complete.
     pub fn flush_async(&self) -> Result<RadosFuture<RadosFinishFlush>> {
         RadosFuture::new(RadosCaution::Safe, RadosFinishFlush, |completion_handle| {
             let err = unsafe { rados::rados_aio_flush_async(self.handle, completion_handle) };
@@ -803,8 +796,8 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// This function is a convenient wrapper around `RadosContext::object_with_caution`
-    /// which uses a default caution value of `RadosCaution::Complete`.
+    /// This function is a convenient wrapper around `RadosContext::object_with_caution` which uses
+    /// a default caution value of `RadosCaution::Complete`.
     pub fn object<T>(self, obj: T) -> RadosObject<'a>
         where T: AsRef<CStr> + Into<CString>
     {
@@ -812,9 +805,9 @@ impl<'a> RadosContext<'a> {
     }
 
 
-    /// Get a wrapper for a given object which implements `Read`, `Write`, and `Seek`.
-    /// Write operations are done asynchronously; reads synchronously, and `Seek` only
-    /// runs a librados operation in the case of `SeekFrom::End`.
+    /// Get a wrapper for a given object which implements `Read`, `Write`, and `Seek`.  Write
+    /// operations are done asynchronously; reads synchronously, and `Seek` only runs a librados
+    /// operation in the case of `SeekFrom::End`.
     pub fn object_with_caution<T>(self, caution: RadosCaution, obj: T) -> RadosObject<'a>
         where T: AsRef<CStr> + Into<CString>
     {

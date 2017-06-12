@@ -15,16 +15,15 @@ use errors::{self, Error, ErrorKind, Result, get_error_string};
 use rados::RadosStat;
 
 
-/// `Finalize` abstracts the handling of RADOS completions which have finished
-/// execution.
+/// An abstraction over the handling of RADOS completions which have finished execution.
 pub trait Finalize {
     type Output;
 
     /// On success, we produce output from the state stored in the `Self` type.
     fn on_success(self) -> Self::Output;
 
-    /// On failure, we may either recover from the raw error code or convert the
-    /// raw error code into a nicely readable error.
+    /// On failure, we may either recover from the raw error code or convert the raw error code
+    /// into a nicely readable error.
     fn on_failure(self, u32) -> Result<Self::Output>;
 }
 
@@ -59,14 +58,13 @@ extern "C" fn safe_callback(_handle: rados_completion_t, info_ptr: *mut c_void) 
 }
 
 
-/// Asynchronous I/O through RADOS is abstracted behind the `RadosFuture` type.
-/// Different behaviors corresponding to different AIO operations are implemented
-/// as differing type parameters implementing `Finalize`. Use of the `Finalize`
-/// trait instead of directly implementing `Future` for every unique AIO operation
-/// reduces the risk of incorrectly implementing the different completion modes
-/// (called `RadosCaution` here, we allow AIO operations to wait for either
-/// acknowledgement from the cluster or for the assurance that the operation has
-/// been committed to stable memory.)
+/// Asynchronous I/O through RADOS is abstracted behind the `RadosFuture` type.  Different
+/// behaviors corresponding to different AIO operations are implemented as differing type
+/// parameters implementing `Finalize`. Use of the `Finalize` trait instead of directly
+/// implementing `Future` for every unique AIO operation reduces the risk of incorrectly
+/// implementing the different completion modes (called `RadosCaution` here, we allow AIO
+/// operations to wait for either acknowledgement from the cluster or for the assurance that the
+/// operation has been committed to stable memory.)
 pub struct RadosFuture<F: Finalize> {
     info: Box<CompletionInfo>,
     finalize: Option<F>,
@@ -74,8 +72,8 @@ pub struct RadosFuture<F: Finalize> {
 }
 
 
-/// The `RadosCaution` enum is used to denote the level of safety the caller
-/// desires from an asynchronous operation.
+/// The `RadosCaution` enum is used to denote the level of safety the caller desires from an
+/// asynchronous operation.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum RadosCaution {
     /// Wait for the operation to be acknowledged by the cluster. This indicates
@@ -99,10 +97,9 @@ impl<F: Finalize> Drop for RadosFuture<F> {
 
 
 impl<F: Finalize> RadosFuture<F> {
-    /// Create a new `RadosFuture` given a function to initialize the completion,
-    /// a caution level, and a finalizer. `rados_aio_release_completion` should
-    /// *not* be called on the `rados_completion_t` passed into the initializer,
-    /// as this will result in undefined behavior.
+    /// Create a new `RadosFuture` given a function to initialize the completion, a caution level,
+    /// and a finalizer. `rados_aio_release_completion` should *not* be called on the
+    /// `rados_completion_t` passed into the initializer.
     pub fn new<G>(caution: RadosCaution, finalize: F, init: G) -> Result<RadosFuture<F>>
         where G: FnOnce(rados_completion_t) -> Result<()>
     {
@@ -135,15 +132,15 @@ impl<F: Finalize> RadosFuture<F> {
     }
 
 
-    /// Poll the underlying `rados_completion_t` to check whether the operation
-    /// has been acked by the cluster.
+    /// Poll the underlying `rados_completion_t` to check whether the operation has been acked by
+    /// the cluster.
     pub fn is_complete(&self) -> bool {
         unsafe { rados::rados_aio_is_complete(self.handle) != 0 }
     }
 
 
-    /// Poll the underlying `rados_completion_t` to check whether the operation
-    /// has been committed to stable memory.
+    /// Poll the underlying `rados_completion_t` to check whether the operation has been committed
+    /// to stable memory.
     pub fn is_safe(&self) -> bool {
         unsafe { rados::rados_aio_is_safe(self.handle) != 0 }
     }
@@ -151,8 +148,8 @@ impl<F: Finalize> RadosFuture<F> {
 
     /// Get the error value of the completion, if the completion has errored.
     ///
-    /// *Precondition:* this function should only be called after the completion
-    /// is complete or safe.
+    /// *Precondition:* this function should only be called after the completion is complete or
+    /// safe.
     ///
     /// If an error has occurred, the raw error code is returned as a u32.
     pub fn get_error_value(&self) -> Option<u32> {
@@ -162,12 +159,12 @@ impl<F: Finalize> RadosFuture<F> {
     }
 
 
-    /// Take the finalizer value out of the `RadosFuture`. This is called when
-    /// the future is complete and will not be `poll`ed again.
+    /// Take the finalizer value out of the `RadosFuture`. This is called when the future is
+    /// complete and will not be `poll`ed again.
     ///
-    /// *Precondition:* the future is done executing, and has not had its value
-    /// read yet. If `take_finalize` is called again after the future is finished
-    /// executing, it will panic due to the underlying call to `Option::take`.
+    /// *Precondition:* the future is done executing, and has not had its value read yet. If
+    /// `take_finalize` is called again after the future is finished executing, it will panic due
+    /// to the underlying call to `Option::take`.
     fn take_finalize(&mut self) -> F {
         self.finalize
             .take()
@@ -187,13 +184,12 @@ impl<F: Finalize> Future for RadosFuture<F> {
                  self.is_safe(),
                  self.get_error_value());
         match (self.info.caution, self.get_error_value()) {
-            // If `self.get_error_value()` is `Some`, an error has occurred. We
-            // can only be certain that an error has occurred if the operation
-            // has been acked or is safe, so we check to ensure that one of the
-            // two is true before returning an error.
+            // If `self.get_error_value()` is `Some`, an error has occurred. We can only be certain
+            // that an error has occurred if the operation has been acked or is safe, so we check
+            // to ensure that one of the two is true before returning an error.
             (_, Some(error)) => {
-                // Since we cannot bind by-move into a pattern guard, we must
-                // resort to an if-statement here.
+                // Since we cannot bind by-move into a pattern guard, we must resort to an
+                // if-statement here.
                 if self.is_complete() || self.is_safe() {
                     self.take_finalize().on_failure(error).map(Async::Ready)
                 } else {
@@ -252,6 +248,7 @@ impl Finalize for RadosFinishAppend {
     fn on_success(self) -> () {
         ()
     }
+
     fn on_failure(self, error: u32) -> Result<()> {
         Err(ErrorKind::AsyncAppendFailed(self.oid, self.len, get_error_string(error)?).into())
     }
@@ -313,9 +310,9 @@ impl Finalize for RadosFinishFlush {
 
 /// The finalizer for a `rados_aio_read`.
 ///
-/// NOTE: as per the librados documentation, [`rados_aio_read` does not ever become
-/// "safe" - only "complete"/acked - because it makes no sense for a read operation
-/// to become committed to cluster memory.](http://docs.ceph.com/docs/master/rados/api/librados/#rados_aio_read)
+/// NOTE: as per the librados documentation, [`rados_aio_read` does not ever become "safe" - only
+/// "complete"/acked - because it makes no sense for a read operation to become committed to
+/// cluster memory.](http://docs.ceph.com/docs/master/rados/api/librados/#rados_aio_read)
 pub struct RadosFinishRead<'a> {
     // The location in which to store the read data. We hold onto these until
     // they are guaranteed written.
@@ -347,11 +344,10 @@ impl<'a> Finalize for RadosFinishRead<'a> {
 pub struct RadosFinishStat {
     pub oid: CString,
 
-    // We keep the size and time boxed so that their locations remain stable until
-    // their values are finally read. Alternatively this could be done with
-    // references and lifetime parameters like `RadosFinishRead` but this would
-    // be unintuitive to the user as `RadosContext::stat` does not require input
-    // in which to store the read stats.
+    // We keep the size and time boxed so that their locations remain stable until their values are
+    // finally read. Alternatively this could be done with references and lifetime parameters like
+    // `RadosFinishRead` but this would be unintuitive to the user as `RadosContext::stat` does not
+    // require input in which to store the read stats.
     pub boxed: Box<(u64, time_t)>,
 }
 
@@ -374,8 +370,8 @@ impl Finalize for RadosFinishStat {
 }
 
 
-/// The finalizer for checking whether or not an object exists. This is
-/// implemented as a call to `rados_aio_stat`.
+/// The finalizer for checking whether or not an object exists. This is implemented as a call to
+/// `rados_aio_stat`.
 pub struct RadosFinishExists {
     pub oid: CString,
 }
@@ -389,9 +385,8 @@ impl Finalize for RadosFinishExists {
     }
 
     fn on_failure(self, error: u32) -> Result<bool> {
-        // We are checking for existence of the object. If we receive an `ENOENT`
-        // error (entry not found) then we assume that indicates the object does
-        // not exist.
+        // We are checking for existence of the object. If we receive an `ENOENT` error (entry not
+        // found) then we assume that indicates the object does not exist.
         if error as i32 == ENOENT {
             Ok(false)
         } else {
