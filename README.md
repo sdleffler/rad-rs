@@ -67,4 +67,4 @@ Launching the test suite requires Docker to be installed.
 
 # License
 
-This project is licensed under the [Mozilla Public License, version 2.0.](https://www.mozilla.org/en-US/MPL/2.0/).
+This project is licensed under the [Mozilla Public License, version 2.0.](https://www.mozilla.org/en-US/MPL/2.0/)
