@@ -8,6 +8,8 @@ function start_docker() {
 
     local DOCKER_CONTAINER=`docker build ceph-test-docker | awk '/Successfully built/ { print $3 }'`
 
+	echo "Built container: ${DOCKER_CONTAINER}"
+
     # We store the running docker container's ID into the temporary file `.tmp_tc_name`
     # so that we can remember it through subshells and in case something goes wrong
     # and the docker container isn't stopped (i.e. Ctrl-C during running tests.)
@@ -16,6 +18,8 @@ function start_docker() {
     DOCKER_CMD+="-e CEPH_PUBLIC_NETWORK=${DOCKER0_SUBNET} "
     DOCKER_CMD+="-e MON_IP=127.0.0.1 "
     DOCKER_CMD+="--entrypoint=/preentry.sh ${DOCKER_CONTAINER}"
+
+	echo "Starting Ceph demo container with '${DOCKER_CMD}'..."
 
     $DOCKER_CMD > .tmp_tc_name
     
