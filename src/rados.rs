@@ -191,10 +191,10 @@ impl Drop for RadosHandle {
 // the I/O contexts become invalid [citation needed]. As such, we give I/O contexts
 // `Arc<RadosHandle>`s, which are never actually accessed but instead only used for the reference
 // count. The actual `RadosConnection` struct - which *does* call functions on the underlying
-// `RadosHandle` and `rados_t` - is neither `Clone` nor `Send` nor `Sync`; and as such, will only
-// ever be accessed single-threadedly, making it safe. Thus, since the underlying `rados_t` will
-// only ever be accessed single-threadedly (as it is *never* accessed through the references kept
-// in I/O contexts) it is completely safe to give it `Send` and `Sync` capabilities.
+// `RadosHandle` and `rados_t` - is neither `Clone` nor `Sync`. Thus, since the underlying
+// `rados_t` will only ever be accessed single-threadedly (as it is *never* accessed through the
+// references kept in I/O contexts) it is completely safe to give it `Send` and `Sync`
+// capabilities.
 unsafe impl Send for RadosHandle {}
 unsafe impl Sync for RadosHandle {}
 
@@ -202,7 +202,7 @@ unsafe impl Sync for RadosHandle {}
 /// A wrapper over a connection to a Ceph cluster.
 pub struct RadosConnection {
     // Since opt-in builtin traits are not yet stable, use of a dummy pointer will prevent
-    // `RadosConnection` from being `Send` or `Sync`.
+    // `RadosConnection` from being `Sync`.
     _dummy: *const (),
 
     // Although `RadosConnection` isn't cloneable, since we still need to reference-count the
@@ -215,7 +215,7 @@ pub struct RadosConnection {
 
 // OIBITs not yet stable.
 //
-// impl !Send for RadosConnection {}
+unsafe impl Send for RadosConnection {}
 // impl !Sync for RadosConnection {}
 
 
@@ -307,6 +307,14 @@ pub struct RadosContext {
     _conn: Arc<RadosHandle>,
     handle: rados_ioctx_t,
 }
+
+
+// `RadosContext` is safe to `Send`, but not `Sync`; this is because nothing about the
+// `rados_ioctx_t` specifically ties it to the current thread. Thus it is safe to `Send`. However,
+// it is good practice [citation needed] to not use the same `rados_ioctx_t` from different
+// threads; hence `Send` but not `Clone` nor `Sync`.
+unsafe impl Send for RadosContext {}
+// !impl Sync for RadosContext {}
 
 
 impl Drop for RadosContext {

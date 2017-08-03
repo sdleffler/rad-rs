@@ -72,6 +72,12 @@ pub struct RadosFuture<F: Finalize> {
 }
 
 
+// `RadosFuture` is send as long as the finalizer is. It does not implement `Clone` nor `Sync`,
+// however, so all accesses to the `rados_completion_t` - the sole dangerous component - are forced
+// to be single-threaded.
+unsafe impl<F: Finalize + Send> Send for RadosFuture<F> {}
+
+
 /// The `RadosCaution` enum is used to denote the level of safety the caller desires from an
 /// asynchronous operation.
 #[derive(Clone, Copy, PartialEq, Debug)]
