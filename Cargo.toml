@@ -13,7 +13,7 @@ version = "0.2.0"
 
 [dependencies]
 ceph-rust = "0.1.16"
-chrono = "0.3.1"
+chrono = "0.4.0"
 error-chain = "0.10.0"
 futures = "0.1.14"
 libc = "0.2.23"
