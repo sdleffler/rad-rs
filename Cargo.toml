@@ -12,7 +12,7 @@ repository = "https://github.com/sdleffler/rad-rs/"
 version = "0.2.0"
 
 [dependencies]
-ceph-rust = "0.1.16"
+ceph-rust = "0.1.17"
 chrono = "0.4.0"
 error-chain = "0.11.0-rc.2"
 futures = "0.1.14"
