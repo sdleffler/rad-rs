@@ -1,44 +1,29 @@
 use std::env;
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{Read, Write, BufRead, BufReader, BufWriter};
+use std::io::{self, Read, Write, BufRead, BufReader, BufWriter};
 
 use super::connect_to_cluster;
 
 
 fn writer() {
-    let cluster = connect_to_cluster().unwrap();
+    let mut cluster = connect_to_cluster().unwrap();
 
     let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
-    let mut obj_writer = BufWriter::new(pool.object(c!("test_file.obj")));
+    let mut object = pool.object(c!("test_file.obj"));
 
     let mut file_path = env::current_dir().unwrap();
     file_path.push("tests/integration/reader_writer/test_file.txt");
-    let file = File::open(file_path).unwrap();
-    let mut file_reader = BufReader::new(file);
+    let mut file = File::open(file_path).unwrap();
 
-    loop {
-        let bytes_read = {
-            let buf = file_reader.fill_buf().unwrap();
+    io::copy(&mut file, &mut object);
 
-            if buf.len() == 0 {
-                break;
-            }
-
-            obj_writer.write(buf).unwrap();
-
-            buf.len()
-        };
-
-        file_reader.consume(bytes_read);
-    }
-
-    obj_writer.flush().unwrap();
+    object.flush().unwrap();
 }
 
 
 fn reader() {
-    let cluster = connect_to_cluster().unwrap();
+    let mut cluster = connect_to_cluster().unwrap();
 
     let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
     let obj_reader = BufReader::new(pool.object(c!("test_file.obj")));

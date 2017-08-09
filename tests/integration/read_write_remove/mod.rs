@@ -1,15 +1,15 @@
 use std::env;
 use std::ffi::CString;
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 
 use super::connect_to_cluster;
 
 
 #[test]
 fn read_write_remove() {
-    let cluster = connect_to_cluster().unwrap();
-    let pool = cluster.get_pool_context(c!("rbd")).unwrap();
+    let mut cluster = connect_to_cluster().unwrap();
+    let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
 
     let mut test_blobs = Vec::new();
 
