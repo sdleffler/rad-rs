@@ -9,4 +9,5 @@ tests/integration/read_write_remove/test_file3
 tests/integration/read_write_remove/test_file4
 tests/integration/reader_writer/test_file.txt
 **/*.rs.bk
+**/.*.swp
 Cargo.lock
