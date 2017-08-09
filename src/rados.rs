@@ -841,7 +841,7 @@ impl RadosContext {
 
     /// This function is a convenient wrapper around `RadosContext::object_with_caution` which uses
     /// a default caution value of `RadosCaution::Complete`.
-    pub fn object<T>(self, obj: T) -> RadosObject
+    pub fn object<'a, T>(&'a mut self, obj: T) -> RadosObject<'a>
         where T: AsRef<CStr> + Into<CString>
     {
         self.object_with_caution(RadosCaution::Complete, obj)
@@ -851,7 +851,7 @@ impl RadosContext {
     /// Get a wrapper for a given object which implements `Read`, `Write`, and `Seek`.  Write
     /// operations are done asynchronously; reads synchronously, and `Seek` only runs a librados
     /// operation in the case of `SeekFrom::End`.
-    pub fn object_with_caution<T>(self, caution: RadosCaution, obj: T) -> RadosObject
+    pub fn object_with_caution<'a, T>(&'a mut self, caution: RadosCaution, obj: T) -> RadosObject<'a>
         where T: AsRef<CStr> + Into<CString>
     {
         RadosObject::new(self, caution.into(), obj.into())

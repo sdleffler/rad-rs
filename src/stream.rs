@@ -52,16 +52,18 @@ impl WriteState {
 /// synchronous calls on `Read`. If calling `Seek::seek` with
 /// `SeekFrom::End`, a synchronous call to `rados_stat` will be made;
 /// otherwise, seeking is very cheap and completely local.
-pub struct RadosObject {
-    ctx: RadosContext,
+///
+/// `RadosObject` *will not flush* when dropped; to flush and block on write completion, use `std::io::Write::flush`.
+pub struct RadosObject<'a> {
+    ctx: &'a mut RadosContext,
     obj: CString,
     offset: u64,
     write_state: WriteState,
 }
 
 
-impl RadosObject {
-    pub fn new(ctx: RadosContext, caution: RadosCaution, obj: CString) -> RadosObject {
+impl<'a> RadosObject<'a> {
+    pub fn new(ctx: &'a mut RadosContext, caution: RadosCaution, obj: CString) -> RadosObject<'a> {
         RadosObject {
             ctx,
             obj,
@@ -72,17 +74,10 @@ impl RadosObject {
             },
         }
     }
-
-
-    /// Calling `finish` will *not* cause asynchronous writes to be
-    /// flushed. To block on write completion, use `Write::flush`.
-    pub fn finish(self) -> RadosContext {
-        self.ctx
-    }
 }
 
 
-impl Read for RadosObject {
+impl<'a> Read for RadosObject<'a> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let res = self.ctx.read(self.obj.as_ref(), buf, self.offset).map_err(
             |err| {
@@ -96,7 +91,7 @@ impl Read for RadosObject {
 }
 
 
-impl Write for RadosObject {
+impl<'a> Write for RadosObject<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.write_state
             .do_write(&self.ctx, self.obj.as_ref(), buf, &mut self.offset)
@@ -112,7 +107,7 @@ impl Write for RadosObject {
 }
 
 
-impl Seek for RadosObject {
+impl<'a> Seek for RadosObject<'a> {
     fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
         match from {
             SeekFrom::Start(u) => self.offset = u,

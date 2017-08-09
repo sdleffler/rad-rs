@@ -9,7 +9,7 @@ use super::connect_to_cluster;
 fn writer() {
     let cluster = connect_to_cluster().unwrap();
 
-    let pool = cluster.get_pool_context(c!("rbd")).unwrap();
+    let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
     let mut obj_writer = BufWriter::new(pool.object(c!("test_file.obj")));
 
     let mut file_path = env::current_dir().unwrap();
@@ -40,7 +40,7 @@ fn writer() {
 fn reader() {
     let cluster = connect_to_cluster().unwrap();
 
-    let pool = cluster.get_pool_context(c!("rbd")).unwrap();
+    let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
     let obj_reader = BufReader::new(pool.object(c!("test_file.obj")));
 
     let mut file_path = env::current_dir().unwrap();
