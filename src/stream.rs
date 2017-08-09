@@ -24,12 +24,13 @@ impl WriteState {
     /// later.
     fn do_write(
         &mut self,
-        ctx: &RadosContext,
+        ctx: &mut RadosContext,
         obj: &CStr,
         buf: &[u8],
         offset: &mut u64,
     ) -> Result<usize> {
         let future = ctx.write_async(self.caution, obj, buf, *offset)?;
+
         self.futures.push(future);
         *offset += buf.len() as u64;
 
@@ -94,7 +95,7 @@ impl<'a> Read for RadosObject<'a> {
 impl<'a> Write for RadosObject<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.write_state
-            .do_write(&self.ctx, self.obj.as_ref(), buf, &mut self.offset)
+            .do_write(self.ctx, self.obj.as_ref(), buf, &mut self.offset)
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))
     }
 

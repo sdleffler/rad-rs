@@ -20,25 +20,15 @@
 //! to a cluster.
 //!
 //! ```rust,ignore
-//! use std::io::{BufReader, BufWriter};
+//! use std::io::{self, BufReader, BufWriter};
 //!
-//! let cluster = ...;
+//! let mut cluster = ...;
 //!
-//! let pool = cluster.get_pool_context(c!("rbd")).unwrap();
-//! let object = BufReader::new(pool.object(c!("test_file.obj")).unwrap());
+//! let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
+//! let mut object = pool.object(c!("test_file.obj")).unwrap();
+//! let mut file = File::open("test_file.txt").unwrap();
 //!
-//! let file = File::open("test_file.txt").unwrap();
-//! let reader = BufReader::new(file);
-//!
-//! loop {
-//!     let buf = reader.fill_buf().unwrap();
-//!
-//!     if buf.len() == 0 {
-//!         break;
-//!     }
-//!
-//!     object.write(buf);
-//! }
+//! io::copy(&mut file, &mut object).unwrap();
 //!
 //! object.flush().unwrap();
 //! ```
@@ -76,9 +66,12 @@ impl RadosConnectionBuilder {
         let err = unsafe { rados::rados_create(&mut handle, ptr::null()) };
 
         if err < 0 {
-            Err(ErrorKind::CreateClusterHandleFailed(c!("client.admin {DEFAULT}"),
-                                                     try!(errors::get_error_string(-err as u32)))
-                        .into())
+            Err(
+                ErrorKind::CreateClusterHandleFailed(
+                    c!("client.admin {DEFAULT}"),
+                    try!(errors::get_error_string(-err as u32)),
+                ).into(),
+            )
         } else {
             Ok(RadosConnectionBuilder { handle })
         }
@@ -92,9 +85,12 @@ impl RadosConnectionBuilder {
         let err = unsafe { rados::rados_create(&mut handle, user.as_ref().as_ptr()) };
 
         if err < 0 {
-            Err(ErrorKind::CreateClusterHandleFailed(user.into(),
-                                                     try!(errors::get_error_string(-err as u32)))
-                        .into())
+            Err(
+                ErrorKind::CreateClusterHandleFailed(
+                    user.into(),
+                    try!(errors::get_error_string(-err as u32)),
+                ).into(),
+            )
         } else {
             Ok(RadosConnectionBuilder { handle })
         }
@@ -102,15 +98,19 @@ impl RadosConnectionBuilder {
 
 
     /// Read a configuration file from a given path.
-    pub fn read_conf_file<T: AsRef<CStr> + Into<CString>>(self,
-                                                          path: T)
-                                                          -> Result<RadosConnectionBuilder> {
+    pub fn read_conf_file<T: AsRef<CStr> + Into<CString>>(
+        self,
+        path: T,
+    ) -> Result<RadosConnectionBuilder> {
         let err = unsafe { rados::rados_conf_read_file(self.handle, path.as_ref().as_ptr()) };
 
         if err < 0 {
-            Err(ErrorKind::ReadConfFromFileFailed(path.into(),
-                                                  try!(errors::get_error_string(-err as u32)))
-                        .into())
+            Err(
+                ErrorKind::ReadConfFromFileFailed(
+                    path.into(),
+                    try!(errors::get_error_string(-err as u32)),
+                ).into(),
+            )
         } else {
             Ok(self)
         }
@@ -120,20 +120,26 @@ impl RadosConnectionBuilder {
     /// Set an individual configuration option. Useful options include `keyring` if you are trying
     /// to set up Ceph without storing everything inside `/etc/ceph`.
     pub fn conf_set<T, U>(self, option: T, value: U) -> Result<RadosConnectionBuilder>
-        where T: AsRef<CStr> + Into<CString>,
-              U: AsRef<CStr> + Into<CString>
+    where
+        T: AsRef<CStr> + Into<CString>,
+        U: AsRef<CStr> + Into<CString>,
     {
         let err = unsafe {
-            rados::rados_conf_set(self.handle,
-                                  option.as_ref().as_ptr(),
-                                  value.as_ref().as_ptr())
+            rados::rados_conf_set(
+                self.handle,
+                option.as_ref().as_ptr(),
+                value.as_ref().as_ptr(),
+            )
         };
 
         if err < 0 {
-            Err(ErrorKind::ConfSetFailed(option.into(),
-                                         value.into(),
-                                         try!(errors::get_error_string(-err as u32)))
-                        .into())
+            Err(
+                ErrorKind::ConfSetFailed(
+                    option.into(),
+                    value.into(),
+                    try!(errors::get_error_string(-err as u32)),
+                ).into(),
+            )
         } else {
             Ok(self)
         }
@@ -145,9 +151,14 @@ impl RadosConnectionBuilder {
         let err = unsafe { rados::rados_connect(self.handle) };
 
         if err < 0 {
-            Err(ErrorKind::ConnectFailed(try!(errors::get_error_string(-err as u32))).into())
+            Err(
+                ErrorKind::ConnectFailed(try!(errors::get_error_string(-err as u32))).into(),
+            )
         } else {
-            Ok(RadosConnection { _dummy: ptr::null(), conn: Arc::new(RadosHandle { handle: self.handle }) })
+            Ok(RadosConnection {
+                _dummy: ptr::null(),
+                conn: Arc::new(RadosHandle { handle: self.handle }),
+            })
         }
     }
 }
@@ -221,7 +232,7 @@ unsafe impl Send for RadosConnection {}
 
 impl RadosConnection {
     /// Fetch the stats of the entire cluster, using `rados_cluster_stat`.
-    pub fn stat(&self) -> Result<RadosClusterStat> {
+    pub fn stat(&mut self) -> Result<RadosClusterStat> {
         let mut cluster_stat = Struct_rados_cluster_stat_t {
             kb: 0,
             kb_used: 0,
@@ -232,62 +243,77 @@ impl RadosConnection {
         let err = unsafe { rados::rados_cluster_stat(self.conn.handle, &mut cluster_stat) };
 
         if err < 0 {
-            Err(ErrorKind::ClusterStatFailed(try!(errors::get_error_string(-err as u32))).into())
+            Err(
+                ErrorKind::ClusterStatFailed(try!(errors::get_error_string(-err as u32))).into(),
+            )
         } else {
             Ok(RadosClusterStat {
-                   kb: cluster_stat.kb,
-                   kb_used: cluster_stat.kb_used,
-                   kb_avail: cluster_stat.kb_avail,
-                   num_objects: cluster_stat.num_objects,
-               })
+                kb: cluster_stat.kb,
+                kb_used: cluster_stat.kb_used,
+                kb_avail: cluster_stat.kb_avail,
+                num_objects: cluster_stat.num_objects,
+            })
         }
     }
 
 
     /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create`.
-    pub fn get_pool_context<T: AsRef<CStr> + Into<CString>>(&self,
-                                                                pool_name: T)
-                                                                -> Result<RadosContext> {
+    pub fn get_pool_context<T: AsRef<CStr> + Into<CString>>(
+        &mut self,
+        pool_name: T,
+    ) -> Result<RadosContext> {
         let mut ioctx_handle = ptr::null_mut();
 
         let err = unsafe {
-            rados::rados_ioctx_create(self.conn.handle, pool_name.as_ref().as_ptr(), &mut ioctx_handle)
+            rados::rados_ioctx_create(
+                self.conn.handle,
+                pool_name.as_ref().as_ptr(),
+                &mut ioctx_handle,
+            )
         };
 
         if err < 0 {
-            Err(ErrorKind::IoCtxFailed(pool_name.into(),
-                                       try!(errors::get_error_string(-err as u32)))
-                        .into())
+            Err(
+                ErrorKind::IoCtxFailed(
+                    pool_name.into(),
+                    try!(errors::get_error_string(-err as u32)),
+                ).into(),
+            )
         } else {
             Ok(RadosContext {
-                   _conn: self.conn.clone(),
-                   handle: ioctx_handle,
-               })
+                _conn: self.conn.clone(),
+                handle: ioctx_handle,
+            })
         }
     }
 
 
     /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create2`.
-    pub fn get_pool_context_from_id(&self, pool_id: u64) -> Result<RadosContext> {
+    pub fn get_pool_context_from_id(&mut self, pool_id: u64) -> Result<RadosContext> {
         let mut ioctx_handle = ptr::null_mut();
 
         let err = unsafe {
-            rados::rados_ioctx_create2(self.conn.handle,
-                                       *(&pool_id as *const u64 as *const i64),
-                                       &mut ioctx_handle)
+            rados::rados_ioctx_create2(
+                self.conn.handle,
+                *(&pool_id as *const u64 as *const i64),
+                &mut ioctx_handle,
+            )
         };
 
         if err < 0 {
             // It's okay to unwrap the new CString here because we're guaranteed
             // to get a valid CString - we're printing a number.
-            Err(ErrorKind::IoCtxFailed(CString::new(pool_id.to_string()).unwrap(),
-                                       try!(errors::get_error_string(-err as u32)))
-                        .into())
+            Err(
+                ErrorKind::IoCtxFailed(
+                    CString::new(pool_id.to_string()).unwrap(),
+                    try!(errors::get_error_string(-err as u32)),
+                ).into(),
+            )
         } else {
             Ok(RadosContext {
-                   _conn: self.conn.clone(),
-                   handle: ioctx_handle,
-               })
+                _conn: self.conn.clone(),
+                handle: ioctx_handle,
+            })
         }
     }
 }
@@ -328,24 +354,29 @@ impl Drop for RadosContext {
 
 impl RadosContext {
     /// Fetch an extended attribute on a given RADOS object using `rados_getxattr`.
-    pub fn get_xattr<T, U>(&self, obj: T, key: U) -> Result<Vec<u8>>
-        where T: AsRef<CStr> + Into<CString>,
-              U: AsRef<CStr> + Into<CString>
+    pub fn get_xattr<T, U>(&mut self, obj: T, key: U) -> Result<Vec<u8>>
+    where
+        T: AsRef<CStr> + Into<CString>,
+        U: AsRef<CStr> + Into<CString>,
     {
         let mut buf = [0u8; RADOS_READ_BUFFER_SIZE];
 
         let err = unsafe {
-            rados::rados_getxattr(self.handle,
-                                  obj.as_ref().as_ptr(),
-                                  key.as_ref().as_ptr(),
-                                  buf.as_mut_ptr() as *mut c_char,
-                                  buf.len())
+            rados::rados_getxattr(
+                self.handle,
+                obj.as_ref().as_ptr(),
+                key.as_ref().as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len(),
+            )
         };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(-err as u32));
 
-            Err(ErrorKind::GetXAttrFailed(obj.into(), key.into(), error_string).into())
+            Err(
+                ErrorKind::GetXAttrFailed(obj.into(), key.into(), error_string).into(),
+            )
         } else {
             Ok(buf.iter().cloned().take(err as usize).collect())
         }
@@ -353,22 +384,27 @@ impl RadosContext {
 
 
     /// Set an extended attribute on a given RADOS object using `rados_setxattr`.
-    pub fn set_xattr<T, U>(&self, obj: T, key: U, value: &[u8]) -> Result<()>
-        where T: AsRef<CStr> + Into<CString>,
-              U: AsRef<CStr> + Into<CString>
+    pub fn set_xattr<T, U>(&mut self, obj: T, key: U, value: &[u8]) -> Result<()>
+    where
+        T: AsRef<CStr> + Into<CString>,
+        U: AsRef<CStr> + Into<CString>,
     {
         let err = unsafe {
-            rados::rados_setxattr(self.handle,
-                                  obj.as_ref().as_ptr(),
-                                  key.as_ref().as_ptr(),
-                                  value.as_ptr() as *const c_char,
-                                  value.len())
+            rados::rados_setxattr(
+                self.handle,
+                obj.as_ref().as_ptr(),
+                key.as_ref().as_ptr(),
+                value.as_ptr() as *const c_char,
+                value.len(),
+            )
         };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(-err as u32));
 
-            Err(ErrorKind::SetXAttrFailed(obj.into(), key.into(), value.len(), error_string).into())
+            Err(
+                ErrorKind::SetXAttrFailed(obj.into(), key.into(), value.len(), error_string).into(),
+            )
         } else {
             Ok(())
         }
@@ -376,21 +412,26 @@ impl RadosContext {
 
 
     /// Write to a RADOS object using `rados_write`.
-    pub fn write<T>(&self, obj: T, buf: &[u8], offset: u64) -> Result<()>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn write<T>(&mut self, obj: T, buf: &[u8], offset: u64) -> Result<()>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let err = unsafe {
-            rados::rados_write(self.handle,
-                               obj.as_ref().as_ptr(),
-                               buf.as_ptr() as *const c_char,
-                               buf.len(),
-                               offset)
+            rados::rados_write(
+                self.handle,
+                obj.as_ref().as_ptr(),
+                buf.as_ptr() as *const c_char,
+                buf.len(),
+                offset,
+            )
         };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(-err as u32));
 
-            Err(ErrorKind::WriteFailed(obj.into(), buf.len(), offset, error_string).into())
+            Err(
+                ErrorKind::WriteFailed(obj.into(), buf.len(), offset, error_string).into(),
+            )
         } else {
             Ok(())
         }
@@ -398,20 +439,25 @@ impl RadosContext {
 
 
     /// Write the entirety of a RADOS object, overwriting if necessary, using `rados_write_full`.
-    pub fn write_full<T>(&self, obj: T, buf: &[u8]) -> Result<()>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn write_full<T>(&mut self, obj: T, buf: &[u8]) -> Result<()>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let err = unsafe {
-            rados::rados_write_full(self.handle,
-                                    obj.as_ref().as_ptr(),
-                                    buf.as_ptr() as *const c_char,
-                                    buf.len())
+            rados::rados_write_full(
+                self.handle,
+                obj.as_ref().as_ptr(),
+                buf.as_ptr() as *const c_char,
+                buf.len(),
+            )
         };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(-err as u32));
 
-            Err(ErrorKind::FullWriteFailed(obj.into(), buf.len(), error_string).into())
+            Err(
+                ErrorKind::FullWriteFailed(obj.into(), buf.len(), error_string).into(),
+            )
         } else {
             Ok(())
         }
@@ -419,20 +465,25 @@ impl RadosContext {
 
 
     /// Append to a RADOS object using `rados_append`.
-    pub fn append<T>(&self, obj: T, buf: &[u8]) -> Result<()>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn append<T>(&mut self, obj: T, buf: &[u8]) -> Result<()>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let err = unsafe {
-            rados::rados_append(self.handle,
-                                obj.as_ref().as_ptr(),
-                                buf.as_ptr() as *const c_char,
-                                buf.len())
+            rados::rados_append(
+                self.handle,
+                obj.as_ref().as_ptr(),
+                buf.as_ptr() as *const c_char,
+                buf.len(),
+            )
         };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(-err as u32));
 
-            Err(ErrorKind::AppendFailed(obj.into(), buf.len(), error_string).into())
+            Err(
+                ErrorKind::AppendFailed(obj.into(), buf.len(), error_string).into(),
+            )
         } else {
             Ok(())
         }
@@ -440,21 +491,26 @@ impl RadosContext {
 
 
     /// Read from a RADOS object using `rados_read`.
-    pub fn read<T>(&self, obj: T, buf: &mut [u8], offset: u64) -> Result<usize>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn read<T>(&mut self, obj: T, buf: &mut [u8], offset: u64) -> Result<usize>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let err = unsafe {
-            rados::rados_read(self.handle,
-                              obj.as_ref().as_ptr(),
-                              buf.as_mut_ptr() as *mut c_char,
-                              buf.len(),
-                              offset)
+            rados::rados_read(
+                self.handle,
+                obj.as_ref().as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len(),
+                offset,
+            )
         };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(-err as u32));
 
-            Err(ErrorKind::ReadFailed(obj.into(), buf.len(), offset, error_string).into())
+            Err(
+                ErrorKind::ReadFailed(obj.into(), buf.len(), offset, error_string).into(),
+            )
         } else {
             Ok(err as usize)
         }
@@ -466,8 +522,9 @@ impl RadosContext {
     /// *every* single requested block.
     ///
     /// TODO: read in the length with `RadosContext::stat` and then asynchronously read chunks.
-    pub fn read_full<T>(&self, obj: T, vec: &mut Vec<u8>) -> Result<usize>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn read_full<T>(&mut self, obj: T, vec: &mut Vec<u8>) -> Result<usize>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let mut buf = [0u8; RADOS_READ_BUFFER_SIZE];
 
@@ -496,7 +553,7 @@ impl RadosContext {
 
 
     /// Delete a RADOS object using `rados_remove`.
-    pub fn remove<T: AsRef<CStr> + Into<CString>>(&self, obj: T) -> Result<()> {
+    pub fn remove<T: AsRef<CStr> + Into<CString>>(&mut self, obj: T) -> Result<()> {
         let err = unsafe { rados::rados_remove(self.handle, obj.as_ref().as_ptr()) };
 
         if err < 0 {
@@ -510,13 +567,15 @@ impl RadosContext {
 
 
     /// Resize a RADOS object, filling with zeroes if necessary, using `rados_trunc`.
-    pub fn resize<T: AsRef<CStr> + Into<CString>>(&self, obj: T, size: u64) -> Result<()> {
+    pub fn resize<T: AsRef<CStr> + Into<CString>>(&mut self, obj: T, size: u64) -> Result<()> {
         let err = unsafe { rados::rados_trunc(self.handle, obj.as_ref().as_ptr(), size) };
 
         if err < 0 {
             let error_string = try!(errors::get_error_string(-err as u32));
 
-            Err(ErrorKind::TruncFailed(obj.into(), size, error_string).into())
+            Err(
+                ErrorKind::TruncFailed(obj.into(), size, error_string).into(),
+            )
         } else {
             Ok(())
         }
@@ -524,8 +583,9 @@ impl RadosContext {
 
 
     /// Get the statistics of a given RADOS object using `rados_stat`.
-    pub fn stat<T>(&self, obj: T) -> Result<RadosStat>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn stat<T>(&mut self, obj: T) -> Result<RadosStat>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let mut size: u64 = 0;
         let mut time: time_t = 0;
@@ -539,21 +599,23 @@ impl RadosContext {
             Err(ErrorKind::StatFailed(obj.into(), error_string).into())
         } else {
             Ok(RadosStat {
-                   size,
-                   last_modified: Local.timestamp(time, 0),
-               })
+                size,
+                last_modified: Local.timestamp(time, 0),
+            })
         }
     }
 
 
     /// Asynchronously write to a RADOS object using `rados_aio_write`.
-    pub fn write_async<T>(&self,
-                          caution: RadosCaution,
-                          obj: T,
-                          buf: &[u8],
-                          offset: u64)
-                          -> Result<RadosFuture<RadosFinishWrite>>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn write_async<T>(
+        &mut self,
+        caution: RadosCaution,
+        obj: T,
+        buf: &[u8],
+        offset: u64,
+    ) -> Result<RadosFuture<RadosFinishWrite>>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let c_obj = obj.into();
 
@@ -567,12 +629,14 @@ impl RadosContext {
 
         RadosFuture::new(caution, write_info, |completion_handle| {
             let err = unsafe {
-                rados::rados_aio_write(self.handle,
-                                       c_obj_ptr,
-                                       completion_handle,
-                                       buf.as_ptr() as *const c_char,
-                                       buf.len(),
-                                       offset)
+                rados::rados_aio_write(
+                    self.handle,
+                    c_obj_ptr,
+                    completion_handle,
+                    buf.as_ptr() as *const c_char,
+                    buf.len(),
+                    offset,
+                )
             };
 
             if err < 0 {
@@ -585,12 +649,14 @@ impl RadosContext {
 
 
     /// Asynchronously append to a RADOS object using `rados_aio_append`.
-    pub fn append_async<T>(&self,
-                           caution: RadosCaution,
-                           obj: T,
-                           buf: &[u8])
-                           -> Result<RadosFuture<RadosFinishAppend>>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn append_async<T>(
+        &mut self,
+        caution: RadosCaution,
+        obj: T,
+        buf: &[u8],
+    ) -> Result<RadosFuture<RadosFinishAppend>>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let c_obj = obj.into();
 
@@ -603,11 +669,13 @@ impl RadosContext {
 
         RadosFuture::new(caution, append_info, |completion_handle| {
             let err = unsafe {
-                rados::rados_aio_append(self.handle,
-                                        c_obj_ptr,
-                                        completion_handle,
-                                        buf.as_ptr() as *const c_char,
-                                        buf.len())
+                rados::rados_aio_append(
+                    self.handle,
+                    c_obj_ptr,
+                    completion_handle,
+                    buf.as_ptr() as *const c_char,
+                    buf.len(),
+                )
             };
 
             if err < 0 {
@@ -620,12 +688,14 @@ impl RadosContext {
 
 
     /// Asynchronously set the contents of a RADOS object using `rados_aio_write_full`.
-    pub fn write_full_async<T>(&self,
-                               caution: RadosCaution,
-                               obj: T,
-                               buf: &[u8])
-                               -> Result<RadosFuture<RadosFinishFullWrite>>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn write_full_async<T>(
+        &mut self,
+        caution: RadosCaution,
+        obj: T,
+        buf: &[u8],
+    ) -> Result<RadosFuture<RadosFinishFullWrite>>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let c_obj = obj.into();
 
@@ -638,11 +708,13 @@ impl RadosContext {
 
         RadosFuture::new(caution, full_write_info, |completion_handle| {
             let err = unsafe {
-                rados::rados_aio_write_full(self.handle,
-                                            c_obj_ptr,
-                                            completion_handle,
-                                            buf.as_ptr() as *const c_char,
-                                            buf.len())
+                rados::rados_aio_write_full(
+                    self.handle,
+                    c_obj_ptr,
+                    completion_handle,
+                    buf.as_ptr() as *const c_char,
+                    buf.len(),
+                )
             };
 
             if err < 0 {
@@ -655,11 +727,13 @@ impl RadosContext {
 
 
     /// Asynchronously delete a RADOS object using `rados_aio_remove`.
-    pub fn remove_async<T>(&self,
-                           caution: RadosCaution,
-                           obj: T)
-                           -> Result<RadosFuture<RadosFinishRemove>>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn remove_async<T>(
+        &mut self,
+        caution: RadosCaution,
+        obj: T,
+    ) -> Result<RadosFuture<RadosFinishRemove>>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let c_obj = obj.into();
 
@@ -683,12 +757,14 @@ impl RadosContext {
     ///
     /// Since this function takes a mutable reference to the relevant buffer, the future must live
     /// as long as the buffer you are reading into.
-    pub fn read_async<'ctx, 'buf, T>(&'ctx self,
-                                     obj: T,
-                                     buf: &'buf mut [u8],
-                                     offset: u64)
-                                     -> Result<RadosFuture<RadosFinishRead<'buf>>>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn read_async<'ctx, 'buf, T>(
+        &'ctx mut self,
+        obj: T,
+        buf: &'buf mut [u8],
+        offset: u64,
+    ) -> Result<RadosFuture<RadosFinishRead<'buf>>>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let c_obj = obj.into();
 
@@ -705,12 +781,14 @@ impl RadosContext {
 
         RadosFuture::new(RadosCaution::Complete, read_info, |completion_handle| {
             let err = unsafe {
-                rados::rados_aio_read(self.handle,
-                                      c_obj_ptr,
-                                      completion_handle,
-                                      buf_ptr,
-                                      buf_len,
-                                      offset)
+                rados::rados_aio_read(
+                    self.handle,
+                    c_obj_ptr,
+                    completion_handle,
+                    buf_ptr,
+                    buf_len,
+                    offset,
+                )
             };
 
             if err < 0 {
@@ -723,8 +801,9 @@ impl RadosContext {
 
 
     /// Asynchronously fetch the statistics of a RADOS object using `rados_aio_stat`.
-    pub fn stat_async<T>(&self, obj: T) -> Result<RadosFuture<RadosFinishStat>>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn stat_async<T>(&mut self, obj: T) -> Result<RadosFuture<RadosFinishStat>>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let c_obj = obj.into();
 
@@ -738,11 +817,13 @@ impl RadosContext {
 
         RadosFuture::new(RadosCaution::Complete, read_info, |completion_handle| {
             let err = unsafe {
-                rados::rados_aio_stat(self.handle,
-                                      c_obj_ptr,
-                                      completion_handle,
-                                      size_ptr,
-                                      time_ptr)
+                rados::rados_aio_stat(
+                    self.handle,
+                    c_obj_ptr,
+                    completion_handle,
+                    size_ptr,
+                    time_ptr,
+                )
             };
 
             if err < 0 {
@@ -756,8 +837,9 @@ impl RadosContext {
 
     /// Check whether or not a RADOS object exists under a given name, using `rados_stat` and
     /// checking the error code for `ENOENT`.
-    pub fn exists<T>(&self, obj: T) -> Result<bool>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn exists<T>(&mut self, obj: T) -> Result<bool>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         let mut size: u64 = 0;
         let mut time: time_t = 0;
@@ -779,10 +861,10 @@ impl RadosContext {
 
     /// Asynchronously check for RADOS object existence using `rados_aio_stat` and checking the
     /// error code for `ENOENT`.
-    pub fn exists_async<T: AsRef<CStr> + Into<CString>>
-        (&self,
-         obj: T)
-         -> Result<RadosFuture<RadosFinishExists>> {
+    pub fn exists_async<T: AsRef<CStr> + Into<CString>>(
+        &mut self,
+        obj: T,
+    ) -> Result<RadosFuture<RadosFinishExists>> {
         let c_obj = obj.into();
         let c_obj_ptr = c_obj.as_ptr();
 
@@ -790,11 +872,13 @@ impl RadosContext {
 
         RadosFuture::new(RadosCaution::Complete, read_info, |completion_handle| {
             let err = unsafe {
-                rados::rados_aio_stat(self.handle,
-                                      c_obj_ptr,
-                                      completion_handle,
-                                      ptr::null_mut(),
-                                      ptr::null_mut())
+                rados::rados_aio_stat(
+                    self.handle,
+                    c_obj_ptr,
+                    completion_handle,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
             };
 
             if err < 0 {
@@ -807,7 +891,7 @@ impl RadosContext {
 
 
     /// Flush all asynchronous I/O actions on the given context, blocking until they are complete.
-    pub fn flush(&self) -> Result<()> {
+    pub fn flush(&mut self) -> Result<()> {
         // BUG: `rados_aio_flush` always returns 0
         // http://docs.ceph.com/docs/master/rados/api/librados/#rados_aio_flush
         //
@@ -817,7 +901,9 @@ impl RadosContext {
         let err = unsafe { rados::rados_aio_flush(self.handle) };
 
         if err < 0 {
-            Err(ErrorKind::FlushFailed(try!(errors::get_error_string(-err as u32))).into())
+            Err(
+                ErrorKind::FlushFailed(try!(errors::get_error_string(-err as u32))).into(),
+            )
         } else {
             Ok(())
         }
@@ -826,7 +912,7 @@ impl RadosContext {
 
     /// Asynchronously flush all asynchronous I/O actions on the given context.  The resulting
     /// future will complete when all I/O actions are complete.
-    pub fn flush_async(&self) -> Result<RadosFuture<RadosFinishFlush>> {
+    pub fn flush_async(&mut self) -> Result<RadosFuture<RadosFinishFlush>> {
         RadosFuture::new(RadosCaution::Safe, RadosFinishFlush, |completion_handle| {
             let err = unsafe { rados::rados_aio_flush_async(self.handle, completion_handle) };
 
@@ -842,7 +928,8 @@ impl RadosContext {
     /// This function is a convenient wrapper around `RadosContext::object_with_caution` which uses
     /// a default caution value of `RadosCaution::Complete`.
     pub fn object<'a, T>(&'a mut self, obj: T) -> RadosObject<'a>
-        where T: AsRef<CStr> + Into<CString>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         self.object_with_caution(RadosCaution::Complete, obj)
     }
@@ -851,8 +938,13 @@ impl RadosContext {
     /// Get a wrapper for a given object which implements `Read`, `Write`, and `Seek`.  Write
     /// operations are done asynchronously; reads synchronously, and `Seek` only runs a librados
     /// operation in the case of `SeekFrom::End`.
-    pub fn object_with_caution<'a, T>(&'a mut self, caution: RadosCaution, obj: T) -> RadosObject<'a>
-        where T: AsRef<CStr> + Into<CString>
+    pub fn object_with_caution<'a, T>(
+        &'a mut self,
+        caution: RadosCaution,
+        obj: T,
+    ) -> RadosObject<'a>
+    where
+        T: AsRef<CStr> + Into<CString>,
     {
         RadosObject::new(self, caution.into(), obj.into())
     }
