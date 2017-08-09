@@ -4,7 +4,8 @@
 use std::ffi::{CStr, CString};
 use std::io::{self, SeekFrom, Read, Seek, Write};
 
-use futures::Future;
+use futures::future::{ok, Future};
+use futures::stream::{FuturesUnordered, Stream};
 
 use async::{RadosCaution, RadosFuture, RadosFinishWrite};
 use errors::Result;
@@ -13,7 +14,7 @@ use rados::RadosContext;
 
 struct WriteState {
     caution: RadosCaution,
-    futures: Vec<RadosFuture<RadosFinishWrite>>,
+    futures: FuturesUnordered<RadosFuture<RadosFinishWrite>>,
 }
 
 
@@ -21,26 +22,24 @@ impl WriteState {
     /// Asynchronously write to the RADOS cluster, and push the resulting
     /// future into a `Vec` so that all unresolved futures can be `.wait()`d
     /// later.
-    fn do_write(&mut self,
-                ctx: &RadosContext,
-                obj: &CStr,
-                buf: &[u8],
-                offset: &mut u64)
-                -> Result<usize> {
+    fn do_write(
+        &mut self,
+        ctx: &RadosContext,
+        obj: &CStr,
+        buf: &[u8],
+        offset: &mut u64,
+    ) -> Result<usize> {
         let future = ctx.write_async(self.caution, obj, buf, *offset)?;
         self.futures.push(future);
         *offset += buf.len() as u64;
+
         Ok(buf.len())
     }
 
 
     /// Call `.wait()` on every saved future.
     fn do_flush(&mut self) -> Result<()> {
-        for (i, future) in self.futures.drain(..).enumerate() {
-            println!("Waiting on future number {}...", i);
-            future.wait()?;
-        }
-        println!("All futures resolved.");
+        self.futures.by_ref().for_each(ok).wait()?;
 
         Ok(())
     }
@@ -69,7 +68,7 @@ impl RadosObject {
             offset: 0,
             write_state: WriteState {
                 caution,
-                futures: Vec::new(),
+                futures: FuturesUnordered::new(),
             },
         }
     }
@@ -85,9 +84,11 @@ impl RadosObject {
 
 impl Read for RadosObject {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let res = self.ctx
-            .read(self.obj.as_ref(), buf, self.offset)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        let res = self.ctx.read(self.obj.as_ref(), buf, self.offset).map_err(
+            |err| {
+                io::Error::new(io::ErrorKind::Other, err.to_string())
+            },
+        )?;
 
         self.offset += res as u64;
         Ok(res)
@@ -104,9 +105,9 @@ impl Write for RadosObject {
 
 
     fn flush(&mut self) -> io::Result<()> {
-        self.write_state
-            .do_flush()
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))
+        self.write_state.do_flush().map_err(|err| {
+            io::Error::new(io::ErrorKind::Other, err.to_string())
+        })
     }
 }
 
