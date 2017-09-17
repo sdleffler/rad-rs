@@ -184,11 +184,6 @@ impl<F: Finalize> Future for RadosFuture<F> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<F::Output, Error> {
-        println!("Polling future with caution {:?}... Complete? {}; Safe? {}; Error value: {:?}",
-                 self.info.caution,
-                 self.is_complete(),
-                 self.is_safe(),
-                 self.get_error_value());
         match (self.info.caution, self.get_error_value()) {
             // If `self.get_error_value()` is `Some`, an error has occurred. We can only be certain
             // that an error has occurred if the operation has been acked or is safe, so we check
