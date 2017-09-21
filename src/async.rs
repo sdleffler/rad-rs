@@ -2,14 +2,15 @@
 //! for asynchronous RADOS operations.
 
 use std::ffi::CString;
+use std::mem;
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::Arc;
 
 use ceph_rust::rados::{self, rados_completion_t};
 use chrono::{Local, TimeZone};
 use futures::{Async, Future, Poll};
-use futures::task::{self, Task};
-use libc::{c_void, time_t, ENOENT};
+use futures::task::AtomicTask;
+use libc;
 
 use errors::{self, Error, ErrorKind, Result, get_error_string};
 use rados::RadosStat;
@@ -29,32 +30,17 @@ pub trait Finalize {
 
 
 struct CompletionInfo {
-    caution: RadosCaution,
-    task: Mutex<Option<Task>>,
+    task: AtomicTask,
 }
 
 
-extern "C" fn complete_callback(_handle: rados_completion_t, info_ptr: *mut c_void) {
-    unsafe {
-        let info = &*(info_ptr as *const CompletionInfo);
+extern "C" fn callback(_handle: rados_completion_t, info_ptr: *mut libc::c_void) {
+    println!("RADOS callback, future ready: {:p}", _handle);
 
-        match *info.task.lock().unwrap() {
-            Some(ref task) if info.caution == RadosCaution::Complete => task.notify(),
-            _ => {}
-        }
-    }
-}
+    let info = unsafe { Arc::from_raw(info_ptr as *const CompletionInfo) };
 
-
-extern "C" fn safe_callback(_handle: rados_completion_t, info_ptr: *mut c_void) {
-    unsafe {
-        let info = &*(info_ptr as *const CompletionInfo);
-
-        match *info.task.lock().unwrap() {
-            Some(ref task) => task.notify(),
-            _ => {}
-        }
-    }
+    info.task.notify();
+    mem::drop(info);
 }
 
 
@@ -66,7 +52,8 @@ extern "C" fn safe_callback(_handle: rados_completion_t, info_ptr: *mut c_void) 
 /// operations to wait for either acknowledgement from the cluster or for the assurance that the
 /// operation has been committed to stable memory.)
 pub struct RadosFuture<F: Finalize> {
-    info: Box<CompletionInfo>,
+    info: Arc<CompletionInfo>,
+    caution: RadosCaution,
     finalize: Option<F>,
     handle: rados_completion_t,
 }
@@ -95,9 +82,13 @@ pub enum RadosCaution {
 
 impl<F: Finalize> Drop for RadosFuture<F> {
     fn drop(&mut self) {
+        println!("RADOS future dropping: {:p}", self.handle);
+
         unsafe {
             rados::rados_aio_release(self.handle);
         }
+
+        println!("RADOS future dropped: {:p}", self.handle);
     }
 }
 
@@ -107,32 +98,42 @@ impl<F: Finalize> RadosFuture<F> {
     /// and a finalizer. `rados_aio_release_completion` should *not* be called on the
     /// `rados_completion_t` passed into the initializer.
     pub fn new<G>(caution: RadosCaution, finalize: F, init: G) -> Result<RadosFuture<F>>
-        where G: FnOnce(rados_completion_t) -> Result<()>
+    where
+        G: FnOnce(rados_completion_t) -> Result<()>,
     {
         let mut completion_handle = ptr::null_mut();
 
-        let mut info = Box::new(CompletionInfo {
-                                    task: Mutex::new(None),
-                                    caution,
-                                });
-        let info_ptr = info.as_mut() as *mut CompletionInfo;
+        let info = Arc::new(CompletionInfo { task: AtomicTask::new() });
+
+        let info_ptr = Arc::into_raw(info.clone()) as *mut CompletionInfo;
+        let callback_ptr = callback as extern "C" fn(*mut libc::c_void, *mut libc::c_void);
+
+        let (complete_cb, safe_cb) = match caution {
+            RadosCaution::Complete => (Some(callback_ptr), None),
+            RadosCaution::Safe => (None, Some(callback_ptr)),
+        };
 
         let err = unsafe {
-            rados::rados_aio_create_completion(info_ptr as *mut c_void,
-                                               Some(complete_callback),
-                                               Some(safe_callback),
-                                               &mut completion_handle)
+            rados::rados_aio_create_completion(
+                info_ptr as *mut libc::c_void,
+                complete_cb,
+                safe_cb,
+                &mut completion_handle,
+            )
         };
 
         if err < 0 {
-            Err(ErrorKind::CompletionFailed(try!(errors::get_error_string(-err as u32))).into())
+            Err(
+                ErrorKind::CompletionFailed(try!(errors::get_error_string(-err as u32))).into(),
+            )
         } else {
-            init(completion_handle).map(|()| {
-                RadosFuture {
-                    info,
-                    finalize: Some(finalize),
-                    handle: completion_handle,
-                }
+            init(completion_handle)?;
+
+            Ok(RadosFuture {
+                info,
+                caution,
+                finalize: Some(finalize),
+                handle: completion_handle,
             })
         }
     }
@@ -172,9 +173,9 @@ impl<F: Finalize> RadosFuture<F> {
     /// `take_finalize` is called again after the future is finished executing, it will panic due
     /// to the underlying call to `Option::take`.
     fn take_finalize(&mut self) -> F {
-        self.finalize
-            .take()
-            .expect("RadosFuture should not be polled a second time after completing!")
+        self.finalize.take().expect(
+            "RadosFuture should not be polled a second time after completing!",
+        )
     }
 }
 
@@ -184,7 +185,7 @@ impl<F: Finalize> Future for RadosFuture<F> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<F::Output, Error> {
-        match (self.info.caution, self.get_error_value()) {
+        match (self.caution, self.get_error_value()) {
             // If `self.get_error_value()` is `Some`, an error has occurred. We can only be certain
             // that an error has occurred if the operation has been acked or is safe, so we check
             // to ensure that one of the two is true before returning an error.
@@ -206,7 +207,7 @@ impl<F: Finalize> Future for RadosFuture<F> {
             }
 
             _ => {
-                *self.info.task.lock().unwrap() = Some(task::current());
+                self.info.task.register();
                 Ok(Async::NotReady)
             }
         }
@@ -230,8 +231,10 @@ impl Finalize for RadosFinishWrite {
     }
 
     fn on_failure(self, error: u32) -> Result<()> {
-        Err(ErrorKind::AsyncWriteFailed(self.oid, self.len, self.off, get_error_string(error)?)
-                .into())
+        Err(
+            ErrorKind::AsyncWriteFailed(self.oid, self.len, self.off, get_error_string(error)?)
+                .into(),
+        )
     }
 }
 
@@ -251,7 +254,9 @@ impl Finalize for RadosFinishAppend {
     }
 
     fn on_failure(self, error: u32) -> Result<()> {
-        Err(ErrorKind::AsyncAppendFailed(self.oid, self.len, get_error_string(error)?).into())
+        Err(
+            ErrorKind::AsyncAppendFailed(self.oid, self.len, get_error_string(error)?).into(),
+        )
     }
 }
 
@@ -270,7 +275,9 @@ impl Finalize for RadosFinishFullWrite {
         ()
     }
     fn on_failure(self, error: u32) -> Result<()> {
-        Err(ErrorKind::AsyncFullWriteFailed(self.oid, self.len, get_error_string(error)?).into())
+        Err(
+            ErrorKind::AsyncFullWriteFailed(self.oid, self.len, get_error_string(error)?).into(),
+        )
     }
 }
 
@@ -288,7 +295,9 @@ impl Finalize for RadosFinishRemove {
         ()
     }
     fn on_failure(self, error: u32) -> Result<()> {
-        Err(ErrorKind::AsyncRemoveFailed(self.oid, get_error_string(error)?).into())
+        Err(
+            ErrorKind::AsyncRemoveFailed(self.oid, get_error_string(error)?).into(),
+        )
     }
 }
 
@@ -332,11 +341,14 @@ impl<'a> Finalize for RadosFinishRead<'a> {
     }
 
     fn on_failure(self, error: u32) -> Result<&'a mut [u8]> {
-        Err(ErrorKind::AsyncReadFailed(self.oid,
-                                       self.bytes.len(),
-                                       self.off,
-                                       get_error_string(error)?)
-                    .into())
+        Err(
+            ErrorKind::AsyncReadFailed(
+                self.oid,
+                self.bytes.len(),
+                self.off,
+                get_error_string(error)?,
+            ).into(),
+        )
     }
 }
 
@@ -349,7 +361,7 @@ pub struct RadosFinishStat {
     // finally read. Alternatively this could be done with references and lifetime parameters like
     // `RadosFinishRead` but this would be unintuitive to the user as `RadosContext::stat` does not
     // require input in which to store the read stats.
-    pub boxed: Box<(u64, time_t)>,
+    pub boxed: Box<(u64, libc::time_t)>,
 }
 
 
@@ -366,7 +378,9 @@ impl Finalize for RadosFinishStat {
     }
 
     fn on_failure(self, error: u32) -> Result<RadosStat> {
-        Err(ErrorKind::AsyncStatFailed(self.oid, get_error_string(error)?).into())
+        Err(
+            ErrorKind::AsyncStatFailed(self.oid, get_error_string(error)?).into(),
+        )
     }
 }
 
@@ -388,10 +402,12 @@ impl Finalize for RadosFinishExists {
     fn on_failure(self, error: u32) -> Result<bool> {
         // We are checking for existence of the object. If we receive an `ENOENT` error (entry not
         // found) then we assume that indicates the object does not exist.
-        if error as i32 == ENOENT {
+        if error as i32 == libc::ENOENT {
             Ok(false)
         } else {
-            Err(ErrorKind::AsyncExistsFailed(self.oid, get_error_string(error)?).into())
+            Err(
+                ErrorKind::AsyncExistsFailed(self.oid, get_error_string(error)?).into(),
+            )
         }
     }
 }
