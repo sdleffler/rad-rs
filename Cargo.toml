@@ -9,7 +9,7 @@ license = "MPL-2.0"
 name = "rad"
 readme = "README.md"
 repository = "https://github.com/sdleffler/rad-rs/"
-version = "0.3.2"
+version = "0.3.3"
 
 [dependencies]
 ceph-rust = "0.1.17"
