@@ -35,8 +35,6 @@ struct CompletionInfo {
 
 
 extern "C" fn callback(_handle: rados_completion_t, info_ptr: *mut libc::c_void) {
-    println!("RADOS callback, future ready: {:p}", _handle);
-
     let info = unsafe { Arc::from_raw(info_ptr as *const CompletionInfo) };
 
     info.task.notify();
@@ -82,13 +80,9 @@ pub enum RadosCaution {
 
 impl<F: Finalize> Drop for RadosFuture<F> {
     fn drop(&mut self) {
-        println!("RADOS future dropping: {:p}", self.handle);
-
         unsafe {
             rados::rados_aio_release(self.handle);
         }
-
-        println!("RADOS future dropped: {:p}", self.handle);
     }
 }
 
