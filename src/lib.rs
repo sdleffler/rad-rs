@@ -110,7 +110,6 @@
 //! ```
 
 #![recursion_limit = "1024"]
-#![feature(conservative_impl_trait)]
 
 extern crate ceph_rust;
 extern crate chrono;
