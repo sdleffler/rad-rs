@@ -21,13 +21,21 @@
 //! - Implementations of more futures traits (`Stream`, `Sink`)
 
 #![recursion_limit = "1024"]
+#![feature(conservative_impl_trait)]
 
 extern crate ceph_rust;
 extern crate chrono;
 #[macro_use]
 extern crate error_chain;
+extern crate ffi_pool;
 extern crate futures;
+#[macro_use]
+extern crate lazy_static;
 extern crate libc;
+extern crate stable_deref_trait;
+
+
+pub use stable_deref_trait::StableDeref;
 
 
 #[macro_export]
@@ -39,10 +47,9 @@ macro_rules! c {
 }
 
 
-pub mod async;
+mod async;
 pub mod errors;
 pub mod rados;
-pub mod stream;
 
 pub use errors::*;
 pub use rados::{RadosConnectionBuilder, RadosConnection, RadosContext, RadosStat};

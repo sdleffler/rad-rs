@@ -1,84 +1,101 @@
 //! Wrappers around `rados_completion_t`, providing a safe, futures-based API
 //! for asynchronous RADOS operations.
 
-use std::ffi::CString;
 use std::mem;
 use std::ptr;
 use std::sync::Arc;
 
 use ceph_rust::rados::{self, rados_completion_t};
-use chrono::{Local, TimeZone};
 use futures::{Async, Future, Poll};
 use futures::task::AtomicTask;
 use libc;
 
-use errors::{self, Error, ErrorKind, Result, get_error_string};
-use rados::RadosStat;
+use errors::{self, Error, Result};
 
 
-/// An abstraction over the handling of RADOS completions which have finished execution.
-pub trait Finalize {
-    type Output;
-
-    /// On success, we produce output from the state stored in the `Self` type.
-    fn on_success(self) -> Self::Output;
-
-    /// On failure, we may either recover from the raw error code or convert the raw error code
-    /// into a nicely readable error.
-    fn on_failure(self, u32) -> Result<Self::Output>;
+struct CompletionInfo<T> {
+    task: Arc<AtomicTask>,
+    data: Arc<T>,
 }
 
 
-struct CompletionInfo {
-    task: AtomicTask,
+extern "C" fn callback<T>(_handle: rados_completion_t, info_ptr: *mut libc::c_void) {
+    let CompletionInfo { task, data } =
+        *unsafe { Box::from_raw(info_ptr as *mut CompletionInfo<T>) };
+
+    mem::drop(data);
+    task.notify();
 }
 
 
-extern "C" fn callback(_handle: rados_completion_t, info_ptr: *mut libc::c_void) {
-    let info = unsafe { Arc::from_raw(info_ptr as *const CompletionInfo) };
-
-    info.task.notify();
-    mem::drop(info);
-}
-
-
-/// Asynchronous I/O through RADOS is abstracted behind the `RadosFuture` type.  Different
-/// behaviors corresponding to different AIO operations are implemented as differing type
-/// parameters implementing `Finalize`. Use of the `Finalize` trait instead of directly
-/// implementing `Future` for every unique AIO operation reduces the risk of incorrectly
-/// implementing the different completion modes (called `RadosCaution` here, we allow AIO
-/// operations to wait for either acknowledgement from the cluster or for the assurance that the
-/// operation has been committed to stable memory.)
-pub struct RadosFuture<F: Finalize> {
-    info: Arc<CompletionInfo>,
-    caution: RadosCaution,
-    finalize: Option<F>,
+#[derive(Debug)]
+pub struct Completion<T> {
+    task: Arc<AtomicTask>,
+    data: Option<Arc<T>>,
     handle: rados_completion_t,
 }
 
 
-// `RadosFuture` is send as long as the finalizer is. It does not implement `Clone` nor `Sync`,
-// however, so all accesses to the `rados_completion_t` - the sole dangerous component - are forced
-// to be single-threaded.
-unsafe impl<F: Finalize + Send> Send for RadosFuture<F> {}
+impl<T> Completion<T> {
+    pub fn new<F>(data: T, init: F) -> Result<Completion<T>>
+    where
+        F: FnOnce(rados_completion_t) -> Result<()>,
+    {
+        let mut completion_handle = ptr::null_mut();
 
+        let task = Arc::new(AtomicTask::new());
+        let data = Arc::new(data);
 
-/// The `RadosCaution` enum is used to denote the level of safety the caller desires from an
-/// asynchronous operation.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum RadosCaution {
-    /// Wait for the operation to be acknowledged by the cluster. This indicates
-    /// the operation is in-memory in the cluster, but has not yet necessarily
-    /// been written to disk.
-    Complete,
+        let info_ptr = Box::into_raw(Box::new(CompletionInfo {
+            task: task.clone(),
+            data: data.clone(),
+        }));
 
-    /// Wait for the operation to be guaranteed to be successfully written to
-    /// disk.
-    Safe,
+        let callback_ptr = callback::<T> as extern "C" fn(*mut libc::c_void, *mut libc::c_void);
+
+        // Kraken and later Ceph releases *make no distinction* between the "acked" and "complete"
+        // callbacks. As such, we are free to use strictly the "complete" callback.
+        errors::librados(unsafe {
+            rados::rados_aio_create_completion(
+                info_ptr as *mut libc::c_void,
+                Some(callback_ptr),
+                None,
+                &mut completion_handle,
+            )
+        })?;
+
+        init(completion_handle)?;
+
+        Ok(Completion {
+            task,
+            data: Some(data),
+            handle: completion_handle,
+        })
+    }
 }
 
 
-impl<F: Finalize> Drop for RadosFuture<F> {
+impl<T> Future for Completion<T> {
+    type Item = T;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<T, Error> {
+        self.task.register();
+
+        errors::librados(unsafe { rados::rados_aio_get_return_value(self.handle) })?;
+
+        match Arc::try_unwrap(self.data.take().unwrap()) {
+            Ok(data) => Ok(Async::Ready(data)),
+            Err(arc) => {
+                self.data = Some(arc);
+                Ok(Async::NotReady)
+            }
+        }
+    }
+}
+
+
+impl<T> Drop for Completion<T> {
     fn drop(&mut self) {
         unsafe {
             rados::rados_aio_release(self.handle);
@@ -87,321 +104,162 @@ impl<F: Finalize> Drop for RadosFuture<F> {
 }
 
 
-impl<F: Finalize> RadosFuture<F> {
-    /// Create a new `RadosFuture` given a function to initialize the completion, a caution level,
-    /// and a finalizer. `rados_aio_release_completion` should *not* be called on the
-    /// `rados_completion_t` passed into the initializer.
-    pub fn new<G>(caution: RadosCaution, finalize: F, init: G) -> Result<RadosFuture<F>>
-    where
-        G: FnOnce(rados_completion_t) -> Result<()>,
-    {
-        let mut completion_handle = ptr::null_mut();
-
-        let info = Arc::new(CompletionInfo { task: AtomicTask::new() });
-
-        let info_ptr = Arc::into_raw(info.clone()) as *mut CompletionInfo;
-        let callback_ptr = callback as extern "C" fn(*mut libc::c_void, *mut libc::c_void);
-
-        let (complete_cb, safe_cb) = match caution {
-            RadosCaution::Complete => (Some(callback_ptr), None),
-            RadosCaution::Safe => (None, Some(callback_ptr)),
-        };
-
-        let err = unsafe {
-            rados::rados_aio_create_completion(
-                info_ptr as *mut libc::c_void,
-                complete_cb,
-                safe_cb,
-                &mut completion_handle,
-            )
-        };
-
-        if err < 0 {
-            Err(
-                ErrorKind::CompletionFailed(try!(errors::get_error_string(-err as u32))).into(),
-            )
-        } else {
-            init(completion_handle)?;
-
-            Ok(RadosFuture {
-                info,
-                caution,
-                finalize: Some(finalize),
-                handle: completion_handle,
-            })
-        }
-    }
-
-
-    /// Poll the underlying `rados_completion_t` to check whether the operation has been acked by
-    /// the cluster.
-    pub fn is_complete(&self) -> bool {
-        unsafe { rados::rados_aio_is_complete(self.handle) != 0 }
-    }
-
-
-    /// Poll the underlying `rados_completion_t` to check whether the operation has been committed
-    /// to stable memory.
-    pub fn is_safe(&self) -> bool {
-        unsafe { rados::rados_aio_is_safe(self.handle) != 0 }
-    }
-
-
-    /// Get the error value of the completion, if the completion has errored.
-    ///
-    /// *Precondition:* this function should only be called after the completion is complete or
-    /// safe.
-    ///
-    /// If an error has occurred, the raw error code is returned as a u32.
-    pub fn get_error_value(&self) -> Option<u32> {
-        let err = unsafe { rados::rados_aio_get_return_value(self.handle) };
-
-        if err < 0 { Some(-err as u32) } else { None }
-    }
-
-
-    /// Take the finalizer value out of the `RadosFuture`. This is called when the future is
-    /// complete and will not be `poll`ed again.
-    ///
-    /// *Precondition:* the future is done executing, and has not had its value read yet. If
-    /// `take_finalize` is called again after the future is finished executing, it will panic due
-    /// to the underlying call to `Option::take`.
-    fn take_finalize(&mut self) -> F {
-        self.finalize.take().expect(
-            "RadosFuture should not be polled a second time after completing!",
-        )
-    }
-}
-
-
-impl<F: Finalize> Future for RadosFuture<F> {
-    type Item = F::Output;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<F::Output, Error> {
-        match (self.caution, self.get_error_value()) {
-            // If `self.get_error_value()` is `Some`, an error has occurred. We can only be certain
-            // that an error has occurred if the operation has been acked or is safe, so we check
-            // to ensure that one of the two is true before returning an error.
-            (_, Some(error)) => {
-                // Since we cannot bind by-move into a pattern guard, we must resort to an
-                // if-statement here.
-                if self.is_complete() || self.is_safe() {
-                    self.take_finalize().on_failure(error).map(Async::Ready)
-                } else {
-                    Ok(Async::NotReady)
-                }
-            }
-
-            (RadosCaution::Complete, None) if self.is_complete() || self.is_safe() => {
-                Ok(Async::Ready(self.take_finalize().on_success()))
-            }
-            (RadosCaution::Safe, None) if self.is_safe() => {
-                Ok(Async::Ready(self.take_finalize().on_success()))
-            }
-
-            _ => {
-                self.info.task.register();
-                Ok(Async::NotReady)
-            }
-        }
-    }
-}
-
-
-/// The finalizer for a `rados_aio_write`.
-pub struct RadosFinishWrite {
-    pub oid: CString,
-    pub len: usize,
-    pub off: u64,
-}
-
-
-impl Finalize for RadosFinishWrite {
-    type Output = ();
-
-    fn on_success(self) -> () {
-        ()
-    }
-
-    fn on_failure(self, error: u32) -> Result<()> {
-        Err(
-            ErrorKind::AsyncWriteFailed(self.oid, self.len, self.off, get_error_string(error)?)
-                .into(),
-        )
-    }
-}
-
-
-/// The finalizer for a `rados_aio_append`.
-pub struct RadosFinishAppend {
-    pub oid: CString,
-    pub len: usize,
-}
-
-
-impl Finalize for RadosFinishAppend {
-    type Output = ();
-
-    fn on_success(self) -> () {
-        ()
-    }
-
-    fn on_failure(self, error: u32) -> Result<()> {
-        Err(
-            ErrorKind::AsyncAppendFailed(self.oid, self.len, get_error_string(error)?).into(),
-        )
-    }
-}
-
-
-/// The finalizer for a `rados_aio_write_full`.
-pub struct RadosFinishFullWrite {
-    pub oid: CString,
-    pub len: usize,
-}
-
-
-impl Finalize for RadosFinishFullWrite {
-    type Output = ();
-
-    fn on_success(self) -> () {
-        ()
-    }
-    fn on_failure(self, error: u32) -> Result<()> {
-        Err(
-            ErrorKind::AsyncFullWriteFailed(self.oid, self.len, get_error_string(error)?).into(),
-        )
-    }
-}
-
-
-/// The finalizer for a `rados_aio_remove`.
-pub struct RadosFinishRemove {
-    pub oid: CString,
-}
-
-
-impl Finalize for RadosFinishRemove {
-    type Output = ();
-
-    fn on_success(self) -> () {
-        ()
-    }
-    fn on_failure(self, error: u32) -> Result<()> {
-        Err(
-            ErrorKind::AsyncRemoveFailed(self.oid, get_error_string(error)?).into(),
-        )
-    }
-}
-
-
-/// The finalizer for a `rados_aio_flush`.
-pub struct RadosFinishFlush;
-
-
-impl Finalize for RadosFinishFlush {
-    type Output = ();
-
-    fn on_success(self) -> () {
-        ()
-    }
-    fn on_failure(self, error: u32) -> Result<()> {
-        Err(ErrorKind::AsyncFlushFailed(get_error_string(error)?).into())
-    }
-}
-
-
-/// The finalizer for a `rados_aio_read`.
+/// Conceptually, the `T` is only ever accessed from this `Completion`. Even when dropped, the
+/// `T` is never accessed in a concurrent manner; and thus if `T` is `Send`, `Completion<T>`
+/// is `Send`.
 ///
-/// NOTE: as per the librados documentation, [`rados_aio_read` does not ever become "safe" - only
-/// "complete"/acked - because it makes no sense for a read operation to become committed to
-/// cluster memory.](http://docs.ceph.com/docs/master/rados/api/librados/#rados_aio_read)
-pub struct RadosFinishRead<'a> {
-    // The location in which to store the read data. We hold onto these until
-    // they are guaranteed written.
-    pub bytes: &'a mut [u8],
-
-    pub oid: CString,
-    pub off: u64,
-}
+/// Another way to look at it is this: while `T` is inside an `Arc` at all, *it is only (if ever)
+/// accessed by FFI code*, which has the responsibility of ensuring its accesses remain sane. As
+/// such, we are free to simply mandate `T` is `Send`, as the responsibility of ensuring `Sync`
+/// accesses to whatever buffer `T` is being used as falls to the foreign code.
+unsafe impl<T: Send> Send for Completion<T> {}
 
 
-impl<'a> Finalize for RadosFinishRead<'a> {
-    type Output = &'a mut [u8];
-
-    fn on_success(self) -> &'a mut [u8] {
-        self.bytes
-    }
-
-    fn on_failure(self, error: u32) -> Result<&'a mut [u8]> {
-        Err(
-            ErrorKind::AsyncReadFailed(
-                self.oid,
-                self.bytes.len(),
-                self.off,
-                get_error_string(error)?,
-            ).into(),
-        )
-    }
-}
-
-
-/// The finalizer for a `rados_aio_stat`.
-pub struct RadosFinishStat {
-    pub oid: CString,
-
-    // We keep the size and time boxed so that their locations remain stable until their values are
-    // finally read. Alternatively this could be done with references and lifetime parameters like
-    // `RadosFinishRead` but this would be unintuitive to the user as `RadosContext::stat` does not
-    // require input in which to store the read stats.
-    pub boxed: Box<(u64, libc::time_t)>,
-}
-
-
-impl Finalize for RadosFinishStat {
-    type Output = RadosStat;
-
-    fn on_success(self) -> RadosStat {
-        let (size, time) = *self.boxed;
-
-        RadosStat {
-            size,
-            last_modified: Local.timestamp(time, 0),
-        }
-    }
-
-    fn on_failure(self, error: u32) -> Result<RadosStat> {
-        Err(
-            ErrorKind::AsyncStatFailed(self.oid, get_error_string(error)?).into(),
-        )
-    }
-}
-
-
-/// The finalizer for checking whether or not an object exists. This is implemented as a call to
-/// `rados_aio_stat`.
-pub struct RadosFinishExists {
-    pub oid: CString,
-}
-
-
-impl Finalize for RadosFinishExists {
-    type Output = bool;
-
-    fn on_success(self) -> bool {
-        true
-    }
-
-    fn on_failure(self, error: u32) -> Result<bool> {
-        // We are checking for existence of the object. If we receive an `ENOENT` error (entry not
-        // found) then we assume that indicates the object does not exist.
-        if error as i32 == libc::ENOENT {
-            Ok(false)
-        } else {
-            Err(
-                ErrorKind::AsyncExistsFailed(self.oid, get_error_string(error)?).into(),
-            )
-        }
-    }
-}
+// impl<T> RadosFuture<T> {
+//     pub fn read<B: StableDeref + DerefMut<Target = [u8]>>(
+//         handle: rados_ioctx_t,
+//         object_id: &CStr,
+//         buf: B,
+//         offset: u64,
+//     ) -> Read<B> {
+//         let buf_ptr = buf.as_mut_ptr() as *mut lib::c_char;
+//         let buf_len = buf.len();
+//
+//         let completion_res =
+//             Completion::new(Caution::Complete, buf, |completion_handle| {
+//                 errors::librados(unsafe {
+//                     rados::rados_aio_read(handle, object_id.as_ptr(), buf_ptr, buf_len, offset)
+//                 })
+//             }).map_err(Some);
+//
+//         Read { completion_res }
+//     }
+//
+//
+//     pub fn write(
+//         handle: rados_ioctx_t,
+//         caution: Caution,
+//         object_id: &Cstr,
+//         buf: &[u8],
+//         offset: u64,
+//     ) -> Write {
+//         let completion_res = Completion::new(caution, (), |completion_handle| {
+//             errors::librados(unsafe {
+//                 rados::rados_aio_write(
+//                     handle,
+//                     object_id.as_ptr(),
+//                     completion_handle,
+//                     buf.as_ptr() as *const libc::c_char,
+//                     buf.len(),
+//                     offset,
+//                 )
+//             })
+//         }).map_err(Some);
+//
+//         Write { completion_res }
+//     }
+// }
+//
+//
+// impl Future for Write {
+//     type Item = ();
+//     type Error = Error;
+//
+//     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+//         match self.completion_res.as_mut() {
+//             Ok(ref mut completion) => completion.poll(),
+//             Err(ref mut error) => error.take().unwrap(),
+//         }
+//     }
+// }
+//
+//
+// pub struct Append {
+//     completion_res: StdResult<Completion<()>, Option<Error>>,
+// }
+//
+//
+// impl Append {
+//     pub fn new(
+//         handle: rados_ioctx_t,
+//         caution: Caution,
+//         object_id: &CStr,
+//         buf: &[u8],
+//     ) -> Append {
+//         Completion::new(caution, (), |completion_handle| {
+//             errors::librados(unsafe {
+//                 rados::rados_aio_append(
+//                     handle,
+//                     object_id.as_ptr(),
+//                     completion_handle,
+//                     buf.as_ptr(),
+//                     buf.len(),
+//                 )
+//             })
+//         }).into_future()
+//             .flatten()
+//     }
+// }
+//
+//
+// pub type Remove = Flatten<FutureResult<Completion<()>, Error>>;
+//
+//
+// pub fn remove(handle: rados_ioctx_t, caution: Caution, object_id: &CStr) -> Remove {
+//     Completion::new(caution, (), |completion_handle| {
+//         errors::librados(unsafe {
+//             rados::rados_aio_remove(handle, object_id.as_ptr(), completion_handle)
+//         })
+//     }).into_future()
+//         .flatten()
+// }
+//
+//
+// pub type Flush = Flatten<FutureResult<Completion<()>, Error>>;
+//
+//
+// pub fn flush(handle: rados_ioctx_t) -> Flush {
+//     Completion::new(Caution::Safe, (), |completion_handle| {
+//         errors::librados(unsafe {
+//             rados::rados_aio_flush_async(handle, completion_handle)
+//         })
+//     }).into_future()
+//         .flatten()
+// }
+//
+//
+// pub type Stat = Map<
+//     Flatten<FutureResult<Completion<Box<(u64, libc::time_t)>>, Error>>,
+//     fn(Box<(u64, libc::time_t)>) -> RadosStat,
+// >;
+//
+//
+// fn stat_map(data: Box<(u64, libc::time_t)>) -> RadosStat {
+//     RadosStat {
+//         size: data.0,
+//         last_modified: Local.timestamp(data.1, 0),
+//     }
+// }
+//
+//
+// pub fn stat(handle: rados_ioctx_t, object_id: &CStr) -> Stat {
+//     let data = Box::new((0, 0));
+//     let (size_ptr, time_ptr) = (&mut data.0 as *mut u64, &mut data.1 as *mut libc::time_t);
+//
+//     Completion::new(Caution::Complete, data, |completion_handle| {
+//         errors::librados(unsafe {
+//             rados::rados_aio_stat(
+//                 handle,
+//                 object_id.as_ptr(),
+//                 completion_handle,
+//                 size_ptr,
+//                 time_ptr,
+//             )
+//         })
+//     }).into_future()
+//         .flatten()
+//         .map(stat_map)
+// }
+//
+//
+// pub struct Exists {}

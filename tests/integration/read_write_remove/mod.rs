@@ -1,60 +1,122 @@
-use std::env;
-use std::ffi::CString;
-use std::fs::File;
-use std::io::{self, Read};
+use futures::prelude::*;
+use futures::stream;
+use rand::{Rng, SeedableRng, XorShiftRng};
 
-use super::connect_to_cluster;
+use rad::errors::*;
+
+use super::{CLUSTER_HOLD, connect_to_cluster};
+
+
+const NUM_OBJECTS: usize = 64;
 
 
 #[test]
 fn read_write_remove() {
+    let lock = CLUSTER_HOLD.lock().unwrap();
+
     let mut cluster = connect_to_cluster().unwrap();
-    let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
 
-    let mut test_blobs = Vec::new();
+    let bytes: Vec<_> = (0..NUM_OBJECTS)
+        .map(|i| {
+            let mut buf = Vec::new();
 
-    let mut file_path = env::current_dir().unwrap();
-    file_path.push("tests/integration/read_write_remove/test_file");
+            buf.extend(
+                XorShiftRng::from_seed([i as u32 + 1, 2, 3, 4])
+                    .gen_iter::<u8>()
+                    .take(1 << 16),
+            );
 
-    for i in 0..5 {
-        let file_name = format!("test_file{}", i);
-        file_path.set_file_name(&file_name);
-        println!("Reading file {}...", file_path.to_str().unwrap());
+            buf
+        })
+        .collect();
 
-        let mut file = File::open(&file_path).unwrap();
+    let names: Vec<_> = (0..NUM_OBJECTS).map(|i| format!("obj-{}", i)).collect();
 
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).unwrap();
+    (0..NUM_OBJECTS)
+        .map(|i| -> Result<()> {
+            let mut pool = cluster.get_pool_context("rbd").unwrap();
+            let name = &names[i];
+            let data = &bytes[i];
 
-        println!("Writing to Ceph...");
-        pool.write_full(CString::new(file_name).unwrap(), &bytes)
-            .unwrap();
+            println!("Beginning write for {}", name);
+            pool.write_full(name, data)?;
+            println!("Finished write for {}, asserting existence", name);
+            assert!(pool.exists(name)?);
+            println!("Existence of {} asserted, beginning data check", name);
+            let mut buf = vec![0u8; data.len()];
+            let n = pool.read(name, &mut buf, 0)?;
+            assert!(n == buf.len());
+            assert!(&buf == data);
+            println!("Data equality asserted, beginning removal of {}", name);
+            pool.remove(name)?;
+            println!("Finished removal, asserting inexistence of {}", name);
+            assert!(!pool.exists(name)?);
+            println!("Asserted inexistence of {}", name);
 
-        println!("{} bytes written.", bytes.len());
+            Ok(())
+        })
+        .for_each(|result| result.unwrap());
 
-        test_blobs.push(bytes);
-    }
+    let _ = lock;
+}
 
-    for i in 0..5 {
-        let file_name = CString::new(format!("test_file{}", i)).unwrap();
 
-        println!("Reading test_file{} from Ceph...", i);
+#[test]
+fn read_write_remove_async() {
+    let lock = CLUSTER_HOLD.lock().unwrap();
 
-        let mut buf = Vec::new();
-        pool.read_full(&*file_name, &mut buf).unwrap();
+    let mut cluster = connect_to_cluster().unwrap();
 
-        println!("{} bytes read.", buf.len());
+    let bytes: Vec<_> = (0..NUM_OBJECTS)
+        .map(|i| {
+            let mut buf = Vec::new();
 
-        assert!(test_blobs[i] == buf);
+            buf.extend(
+                XorShiftRng::from_seed([i as u32 + 1, 2, 3, 4])
+                    .gen_iter::<u8>()
+                    .take(1 << 16),
+            );
 
-        pool.remove(file_name).unwrap();
-    }
+            buf
+        })
+        .collect();
 
-    for i in 0..5 {
-        let file_name = CString::new(format!("test_file{}", i)).unwrap();
+    let names: Vec<_> = (0..NUM_OBJECTS).map(|i| format!("obj-{}", i)).collect();
 
-        let stat = pool.stat(file_name);
+    let writes = (0..NUM_OBJECTS).map(|i| {
+        let mut pool = cluster.get_pool_context("rbd").unwrap();
+        let name = &names[i];
+        let data = &bytes[i];
 
-        assert!(stat.is_err());
-    }
+        println!("Beginning write for {}", name);
+        pool.write_full_async(name, data)
+                .and_then(move |()| {
+                    println!("Finished write for {}, beginning existence check", name);
+                    pool.exists_async(name)
+                        .and_then(move |b| {
+                            assert!(b);
+                            println!("Existence of {} asserted, beginning data check", name);
+                            pool.read_async(name, vec![0u8; data.len()], 0)
+                                .and_then(move |buf| {
+                                    assert!(&buf == data);
+                                    println!("Data equality asserted, beginning removal of {}", name);
+                                    pool.remove_async(name).and_then(move |()| {
+                                        println!("Finished removal, asserting inexistence of {}", name);
+                                        pool.exists_async(name).map(move |b| {
+                                            assert!(!b);
+                                            println!("Asserted inexistence of {}", name);
+                                        })
+                                    })
+                                })
+                        })
+                })
+    });
+
+    stream::iter_ok(writes)
+        .buffered(NUM_OBJECTS)
+        .collect()
+        .wait()
+        .unwrap();
+
+    let _ = lock;
 }
