@@ -4,3 +4,8 @@ rust:
   - stable
   - beta
   - nightly
+before_install:
+  - curl https://download.ceph.com/keys/release.asc | sudo apt-key add -
+  - sudo apt-add-repository 'deb https://download.ceph.com/debian-luminous/ xenial main'
+  - sudo apt-get -qq update
+  - sudo apt-get install librados-dev
