@@ -7,30 +7,17 @@
 //! option to the value of `/etc/ceph/ceph.client.admin.keyring` (which is necessary
 //! for connecting to Ceph using config files/keyrings located on nonstandard paths.)
 //!
-//! ```rust,ignore
-//! let cluster = RadosConnectionBuilder::with_user(c!("admin"))?
-//!                   .read_conf_file(c!("/etc/ceph/ceph.conf"))?
-//!                   .conf_set(c!("keyring"), c!("/etc/ceph/ceph.client.admin.keyring"))?
+//! ```rust,no_run
+//! # extern crate rad;
+//! # fn dummy() -> ::rad::errors::Result<()> {
+//! use std::path::Path;
+//! use rad::RadosConnectionBuilder;
+//!
+//! let mut cluster = RadosConnectionBuilder::with_user("admin")?
+//!                   .read_conf_file(Path::new("/etc/ceph/ceph.conf"))?
+//!                   .conf_set("keyring", "/etc/ceph/ceph.client.admin.keyring")?
 //!                   .connect()?;
-//! ```
-//!
-//! ## File writing example
-//!
-//! The following example shows how to write to a file, assuming you have already connected
-//! to a cluster.
-//!
-//! ```rust,ignore
-//! use std::io::{self, BufReader, BufWriter};
-//!
-//! let mut cluster = ...;
-//!
-//! let mut pool = cluster.get_pool_context(c!("rbd")).unwrap();
-//! let mut object = pool.object(c!("test_file.obj")).unwrap();
-//! let mut file = File::open("test_file.txt").unwrap();
-//!
-//! io::copy(&mut file, &mut object).unwrap();
-//!
-//! object.flush().unwrap();
+//! # Ok(()) } fn main() {}
 //! ```
 
 use std::ops::DerefMut;
@@ -54,11 +41,10 @@ use errors::{self, Error, ErrorKind, Result};
 
 
 lazy_static! {
+    /// A pool of `CString`s used for converting Rust strings which need to be passed into
+    /// librados.
     static ref POOL: CStringPool = CStringPool::new(128);
 }
-
-
-pub const RADOS_READ_BUFFER_SIZE: usize = 4096;
 
 
 /// A wrapper around a `rados_t` providing methods for configuring the connection before finalizing
@@ -257,6 +243,7 @@ impl RadosConnection {
 }
 
 
+/// The type of a RADOS AIO operation which has yet to complete.
 #[derive(Debug)]
 pub struct RadosFuture<T> {
     completion_res: StdResult<Completion<T>, Option<Error>>,
@@ -306,6 +293,9 @@ pub struct RadosContext {
 // `rados_ioctx_t` specifically ties it to the current thread. Thus it is safe to `Send`. However,
 // it is good practice [citation needed] to not use the same `rados_ioctx_t` from different
 // threads; hence `Send` but not `Clone` nor `Sync`.
+//
+// The #ceph-devel IRC channel on OFTC has also confirmed that access to `rados_ioctx_t` should be
+// synchronized, but it is safe to send across threads.
 unsafe impl Send for RadosContext {}
 // !impl Sync for RadosContext {}
 
@@ -321,11 +311,13 @@ impl Drop for RadosContext {
 
 impl RadosContext {
     /// Fetch an extended attribute on a given RADOS object using `rados_getxattr`.
-    pub fn get_xattr(&mut self, obj: &str, key: &str) -> Result<Vec<u8>> {
+    ///
+    /// * `size` - the size in bytes of the extended attribute.
+    pub fn get_xattr(&mut self, obj: &str, key: &str, size: usize) -> Result<Vec<u8>> {
         let obj_cstr = POOL.get_str(obj)?;
         let key_cstr = POOL.get_str(key)?;
 
-        let mut buf = vec![0u8; RADOS_READ_BUFFER_SIZE];
+        let mut buf = vec![0u8; size];
 
         errors::librados(unsafe {
             rados::rados_getxattr(
@@ -565,6 +557,7 @@ impl RadosContext {
     }
 
 
+    /// Asynchronously remove a RADOS object from the cluster using `rados_aio_remove`.
     pub fn remove_async(&mut self, obj: &str) -> RadosFuture<()> {
         RadosFuture::new((), |completion_handle| {
             let object_id = POOL.get_str(obj)?;
@@ -582,6 +575,7 @@ impl RadosContext {
     }
 
 
+    /// Asynchronously read from a RADOS object using `rados_aio_read`.
     pub fn read_async<B>(&mut self, obj: &str, mut buf: B, offset: u64) -> RadosFuture<B>
     where
         B: StableDeref + DerefMut<Target = [u8]>,
@@ -610,6 +604,8 @@ impl RadosContext {
     }
 
 
+    /// Asynchronously retrieve statistics of a specific object from the cluster using
+    /// `rados_aio_stat`.
     pub fn stat_async(
         &mut self,
         obj: &str,
@@ -669,6 +665,8 @@ impl RadosContext {
     }
 
 
+    /// Asynchronously check for object existence by using `rados_aio_stat` and checking for
+    /// `ENOENT`.
     pub fn exists_async(
         &mut self,
         obj: &str,
@@ -715,6 +713,8 @@ impl RadosContext {
     }
 
 
+    /// Construct a future which will complete when all I/O actions on the given context are
+    /// complete.
     pub fn flush_async(&mut self) -> RadosFuture<()> {
         RadosFuture::new((), |completion_handle| {
             errors::librados(unsafe {

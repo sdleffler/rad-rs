@@ -13,21 +13,31 @@ use libc;
 use errors::{self, Error, Result};
 
 
+/// The info struct passed into a RADOS callback, providing a trigger to potentially deallocate
+/// associated data and also an `AtomicTask` object for notifying all registered tasks.
 struct CompletionInfo<T> {
     task: Arc<AtomicTask>,
     data: Arc<T>,
 }
 
 
+/// The callback passed into librados, and called on future completion.
 extern "C" fn callback<T>(_handle: rados_completion_t, info_ptr: *mut libc::c_void) {
     let CompletionInfo { task, data } =
         *unsafe { Box::from_raw(info_ptr as *mut CompletionInfo<T>) };
 
+    // Allow a poll to unwrap the contained data.
     mem::drop(data);
+
+    // `AtomicTask` should be notified *after* data is produced. Data is produced, here, by
+    // reducing the strong reference count of the `data: Arc<T>` to `1`, and thus allowing a
+    // successful `.poll()` to `Arc::try_unwrap()` the data.
     task.notify();
 }
 
 
+/// The type of a wrapped `rados_completion_t`, with associated allocated custom data and
+/// `AtomicTask`. This is a bare-metal `RadosFuture`.
 #[derive(Debug)]
 pub struct Completion<T> {
     task: Arc<AtomicTask>,
@@ -37,6 +47,10 @@ pub struct Completion<T> {
 
 
 impl<T> Completion<T> {
+    /// Construct a new `Completion` from a piece of data and an initialization function. The
+    /// initialization function takes in a `rados_completion_t` and is intended to call a
+    /// `rados_aio_*` function on it, which will manipulate the completion's internal state and
+    /// return an error code, which can be reified to a `Result<()>` using `errors::librados`.
     pub fn new<F>(data: T, init: F) -> Result<Completion<T>>
     where
         F: FnOnce(rados_completion_t) -> Result<()>,
@@ -64,13 +78,22 @@ impl<T> Completion<T> {
             )
         })?;
 
-        init(completion_handle)?;
+        match init(completion_handle) {
+            Ok(()) => {
+                Ok(Completion {
+                    task,
+                    data: Some(data),
+                    handle: completion_handle,
+                })
+            }
+            Err(error) => {
+                unsafe {
+                    rados::rados_aio_release(completion_handle);
+                }
 
-        Ok(Completion {
-            task,
-            data: Some(data),
-            handle: completion_handle,
-        })
+                Err(error)
+            }
+        }
     }
 }
 
@@ -80,6 +103,7 @@ impl<T> Future for Completion<T> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<T, Error> {
+        // `AtomicTask` should have `.register()` called before a consumer checks for produced data.
         self.task.register();
 
         errors::librados(unsafe { rados::rados_aio_get_return_value(self.handle) })?;
@@ -113,153 +137,3 @@ impl<T> Drop for Completion<T> {
 /// such, we are free to simply mandate `T` is `Send`, as the responsibility of ensuring `Sync`
 /// accesses to whatever buffer `T` is being used as falls to the foreign code.
 unsafe impl<T: Send> Send for Completion<T> {}
-
-
-// impl<T> RadosFuture<T> {
-//     pub fn read<B: StableDeref + DerefMut<Target = [u8]>>(
-//         handle: rados_ioctx_t,
-//         object_id: &CStr,
-//         buf: B,
-//         offset: u64,
-//     ) -> Read<B> {
-//         let buf_ptr = buf.as_mut_ptr() as *mut lib::c_char;
-//         let buf_len = buf.len();
-//
-//         let completion_res =
-//             Completion::new(Caution::Complete, buf, |completion_handle| {
-//                 errors::librados(unsafe {
-//                     rados::rados_aio_read(handle, object_id.as_ptr(), buf_ptr, buf_len, offset)
-//                 })
-//             }).map_err(Some);
-//
-//         Read { completion_res }
-//     }
-//
-//
-//     pub fn write(
-//         handle: rados_ioctx_t,
-//         caution: Caution,
-//         object_id: &Cstr,
-//         buf: &[u8],
-//         offset: u64,
-//     ) -> Write {
-//         let completion_res = Completion::new(caution, (), |completion_handle| {
-//             errors::librados(unsafe {
-//                 rados::rados_aio_write(
-//                     handle,
-//                     object_id.as_ptr(),
-//                     completion_handle,
-//                     buf.as_ptr() as *const libc::c_char,
-//                     buf.len(),
-//                     offset,
-//                 )
-//             })
-//         }).map_err(Some);
-//
-//         Write { completion_res }
-//     }
-// }
-//
-//
-// impl Future for Write {
-//     type Item = ();
-//     type Error = Error;
-//
-//     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-//         match self.completion_res.as_mut() {
-//             Ok(ref mut completion) => completion.poll(),
-//             Err(ref mut error) => error.take().unwrap(),
-//         }
-//     }
-// }
-//
-//
-// pub struct Append {
-//     completion_res: StdResult<Completion<()>, Option<Error>>,
-// }
-//
-//
-// impl Append {
-//     pub fn new(
-//         handle: rados_ioctx_t,
-//         caution: Caution,
-//         object_id: &CStr,
-//         buf: &[u8],
-//     ) -> Append {
-//         Completion::new(caution, (), |completion_handle| {
-//             errors::librados(unsafe {
-//                 rados::rados_aio_append(
-//                     handle,
-//                     object_id.as_ptr(),
-//                     completion_handle,
-//                     buf.as_ptr(),
-//                     buf.len(),
-//                 )
-//             })
-//         }).into_future()
-//             .flatten()
-//     }
-// }
-//
-//
-// pub type Remove = Flatten<FutureResult<Completion<()>, Error>>;
-//
-//
-// pub fn remove(handle: rados_ioctx_t, caution: Caution, object_id: &CStr) -> Remove {
-//     Completion::new(caution, (), |completion_handle| {
-//         errors::librados(unsafe {
-//             rados::rados_aio_remove(handle, object_id.as_ptr(), completion_handle)
-//         })
-//     }).into_future()
-//         .flatten()
-// }
-//
-//
-// pub type Flush = Flatten<FutureResult<Completion<()>, Error>>;
-//
-//
-// pub fn flush(handle: rados_ioctx_t) -> Flush {
-//     Completion::new(Caution::Safe, (), |completion_handle| {
-//         errors::librados(unsafe {
-//             rados::rados_aio_flush_async(handle, completion_handle)
-//         })
-//     }).into_future()
-//         .flatten()
-// }
-//
-//
-// pub type Stat = Map<
-//     Flatten<FutureResult<Completion<Box<(u64, libc::time_t)>>, Error>>,
-//     fn(Box<(u64, libc::time_t)>) -> RadosStat,
-// >;
-//
-//
-// fn stat_map(data: Box<(u64, libc::time_t)>) -> RadosStat {
-//     RadosStat {
-//         size: data.0,
-//         last_modified: Local.timestamp(data.1, 0),
-//     }
-// }
-//
-//
-// pub fn stat(handle: rados_ioctx_t, object_id: &CStr) -> Stat {
-//     let data = Box::new((0, 0));
-//     let (size_ptr, time_ptr) = (&mut data.0 as *mut u64, &mut data.1 as *mut libc::time_t);
-//
-//     Completion::new(Caution::Complete, data, |completion_handle| {
-//         errors::librados(unsafe {
-//             rados::rados_aio_stat(
-//                 handle,
-//                 object_id.as_ptr(),
-//                 completion_handle,
-//                 size_ptr,
-//                 time_ptr,
-//             )
-//         })
-//     }).into_future()
-//         .flatten()
-//         .map(stat_map)
-// }
-//
-//
-// pub struct Exists {}

@@ -11,46 +11,94 @@ bindings from `ceph-rust`.
 
 ## Connecting to a cluster
 
-The following shows how to connect to a RADOS cluster, by providing a path to a `ceph.conf` file, a path to the `client.admin` keyring, and requesting to connect with the `admin` user. Several things are notable here: first, the `c!` macro provides a convenient way to create a `CString` from a literal. Second of all, this API bares little resemblance to the bare-metal librados API, but it *is* easy to trace what's happening under the hood: `RadosConnectionBuilder::with_user` or `RadosConnectionBuilder::new` allocates a new `rados_t`. `read_conf_file` calls `rados_conf_read_file`, `conf_set` calls `rados_conf_set`, and `connect` calls `rados_connect`.
+The following shows how to connect to a RADOS cluster, by providing a path to a
+`ceph.conf` file, a path to the `client.admin` keyring, and requesting to
+connect with the `admin` user. This API bares little resemblance to the
+bare-metal librados API, but it *is* easy to trace what's happening under the
+hood: `RadosConnectionBuilder::with_user` or `RadosConnectionBuilder::new`
+allocates a new `rados_t`. `read_conf_file` calls `rados_conf_read_file`,
+`conf_set` calls `rados_conf_set`, and `connect` calls `rados_connect`.
 
 ```rust
-let cluster = RadosConnectionBuilder::with_user(c!("admin")).unwrap()
+use rad::RadosConnectionBuilder;
+
+let cluster = RadosConnectionBuilder::with_user("admin").unwrap()
     .read_conf_file("/etc/ceph.conf").unwrap()
-    .conf_set(c!("keyring"), c!("/etc/ceph.client.admin.keyring")).unwrap()
-    .connect();
+    .conf_set("keyring", "/etc/ceph.client.admin.keyring").unwrap()
+    .connect()?;
 ```
 
 The type returned from `.connect()` is a `RadosCluster` handle, which is a wrapper around a `rados_t` which guarantees a `rados_shutdown` on the connection when dropped.
 
-## Writing a file to a cluster
-
-The following example shows how to write a file to a cluster using the `RadosObject` wrapper, which implements the `Write` trait:
+## Writing a file to a cluster with synchronous I/O
 
 ```rust
-use std::io::{BufReader, BufWriter};
+use std::fs::File;
+use std::io::Read;
 
-let cluster = ...;
+use rad::RadosConnectionBuilder;
 
-let pool = cluster.get_pool_context(c!("rbd")).unwrap();
-let object = BufReader::new(pool.object(c!("test_file.obj")).unwrap());
+let cluster = RadosConnectionBuilder::with_user("admin")?
+    .read_conf_file("/etc/ceph.conf")?
+    .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
+    .connect()?;
 
-let file = File::open("test_file.txt").unwrap();
-let reader = BufReader::new(file);
+// Read in bytes from some file to send to the cluster.
+let file = File::open("/path/to/file")?;
+let mut bytes = Vec::new();
+file.read_to_end(&mut bytes)?;
 
-loop {
-    let buf = reader.fill_buf().unwrap();
-    
-    if buf.len() == 0 {
-        break;
-    }
+let pool = cluster.get_pool_context("rbd")?;
 
-    object.write(buf);
-}
+pool.write_full("object-name", &bytes)?;
 
-object.flush().unwrap();
+// Our file is now in the cluster! We can check for its existence:
+assert!(pool.exists("object-name")?);
+
+// And we can also check that it contains the bytes we wrote to it.
+let mut bytes_from_cluster = vec![0u8; bytes.len()];
+let bytes_read = pool.read("object-name", &mut bytes_from_cluster, 0)?;
+assert_eq!(bytes_read, bytes_from_cluster.len());
+assert!(bytes_from_cluster == bytes);
 ```
 
-Reading is similarly simple; see `tests/integration/reader_writer/mod.rs` for more details.
+## Writing multiple objects to a cluster with asynchronous I/O and `futures-rs`
+
+`rad-rs` also supports the librados AIO interface, using the `futures` crate.
+This example will start `NUM_OBJECTS` writes concurrently and then wait for
+them all to finish.
+
+```rust
+use std::fs::File;
+use std::io::Read;
+
+use rand::{Rng, SeedableRng, XorShiftRng};
+
+use rad::RadosConnectionBuilder;
+
+const NUM_OBJECTS: usize = 8;
+
+let cluster = RadosConnectionBuilder::with_user("admin")?
+    .read_conf_file("/etc/ceph.conf")?
+    .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
+    .connect()?;
+
+let pool = cluster.get_pool_context("rbd")?;
+
+stream::iter_ok((0..NUM_OBJECTS)
+    .map(|i| {
+        let bytes = XorShiftRng::from_seed([i as u32 + 1, 2, 3, 4])
+            .gen_iter::<u8>()
+            .take(1 << 16).collect();
+
+        let name = format!("object-{}", i);
+
+        pool.write_full_async(name, &bytes)
+    }))
+    .buffer_unordered(NUM_OBJECTS)
+    .collect()
+    .wait()?;
+```
 
 # Running tests
 

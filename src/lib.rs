@@ -1,4 +1,4 @@
-//! A high-level wrapper library for talking to Ceph RADOS clusters.
+//! # `rad-rs` - A high-level wrapper library for talking to Ceph RADOS clusters.
 //!
 //! Only certain features are currently available, mainly writing and reading to
 //! RADOS objects, as well as a limited set of other operations (object stats,
@@ -10,15 +10,104 @@
 //!
 //! Current features:
 //! - Read, write, full-write, append
-//! - Automatic `rados_shutdown` on drop of the `RadosCluster` type
+//! - Automatic `rados_shutdown` on drop of the reference-counted `RadosCluster` type
 //! - Asynchronous read/write/etc. using futures
-//! - Synchronous read and asynchronous write using the `RadosObject` wrapper,
-//!   which provides `Read`, `Write`, and `Seek` operations in a manner similar
-//!   to files
 //!
-//! Planned features:
-//! - Fully asynchronous read/write using `tokio_io::{AsyncRead, AsyncWrite}`
-//! - Implementations of more futures traits (`Stream`, `Sink`)
+//! ## Examples
+//!
+//! ### Connecting to a cluster
+//!
+//! ```rust,no_run
+//! # extern crate rad;
+//! use std::path::Path;
+//!
+//! use rad::RadosConnectionBuilder;
+//! # fn dummy() -> ::rad::errors::Result<()> {
+//!
+//! let cluster = RadosConnectionBuilder::with_user("admin")?
+//!     .read_conf_file(Path::new("/etc/ceph.conf"))?
+//!     .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
+//!     .connect()?;
+//! # Ok(()) } fn main() {}
+//! ```
+//!
+//! ### Synchronous cluster operations
+//!
+//! ```rust,no_run
+//! # extern crate rad;
+//! # fn dummy() -> ::rad::errors::Result<()> {
+//! use std::fs::File;
+//! use std::io::Read;
+//! use std::path::Path;
+//! 
+//! use rad::RadosConnectionBuilder;
+//! 
+//! let mut cluster = RadosConnectionBuilder::with_user("admin")?
+//!     .read_conf_file(Path::new("/etc/ceph.conf"))?
+//!     .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
+//!     .connect()?;
+//! 
+//! // Read in bytes from some file to send to the cluster.
+//! let mut file = File::open("/path/to/file")?;
+//! let mut bytes = Vec::new();
+//! file.read_to_end(&mut bytes)?;
+//! 
+//! let mut pool = cluster.get_pool_context("rbd")?;
+//! 
+//! pool.write_full("object-name", &bytes)?;
+//! 
+//! // Our file is now in the cluster! We can check for its existence:
+//! assert!(pool.exists("object-name")?);
+//! 
+//! // And we can also check that it contains the bytes we wrote to it.
+//! let mut bytes_from_cluster = vec![0u8; bytes.len()];
+//! let bytes_read = pool.read("object-name", &mut bytes_from_cluster, 0)?;
+//! assert_eq!(bytes_read, bytes_from_cluster.len());
+//! assert!(bytes_from_cluster == bytes);
+//! # Ok(()) } fn main() {}
+//! ```
+//!
+//! ### Asynchronous cluster I/O
+//!
+//! ```rust,no_run
+//! # extern crate futures;
+//! # extern crate rad;
+//! # extern crate rand;
+//! # fn dummy() -> ::rad::errors::Result<()> {
+//! use std::path::Path;
+//! use std::io::Read;
+//! 
+//! use futures::prelude::*;
+//! use futures::stream;
+//! use rand::{Rng, SeedableRng, XorShiftRng};
+//! 
+//! use rad::RadosConnectionBuilder;
+//! 
+//! const NUM_OBJECTS: usize = 8;
+//! 
+//! let mut cluster = RadosConnectionBuilder::with_user("admin")?
+//!     .read_conf_file(Path::new("/etc/ceph.conf"))?
+//!     .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
+//!     .connect()?;
+//! 
+//! let mut pool = cluster.get_pool_context("rbd")?;
+//! 
+//! stream::iter_ok((0..NUM_OBJECTS)
+//!     .map(|i| {
+//!         let bytes = XorShiftRng::from_seed([i as u32 + 1, 2, 3, 4])
+//!             .gen_iter::<u8>()
+//!             .take(1 << 16)
+//!             .collect::<Vec<u8>>();
+//! 
+//!         let name = format!("object-{}", i);
+//! 
+//!         pool.write_full_async(&name, &bytes)
+//!     }))
+//!     .buffer_unordered(NUM_OBJECTS)
+//!     .collect()
+//!     .wait()?;
+//! # Ok(()) } fn main() {}
+//! ```
 
 #![recursion_limit = "1024"]
 #![feature(conservative_impl_trait)]
