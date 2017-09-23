@@ -8,6 +8,25 @@ This library provides a typesafe and extremely high-level Rust interface to
 RADOS, the Reliable Autonomous Distributed Object Store. It uses the raw C
 bindings from `ceph-rust`.
 
+# Installation
+
+To build and use this library, a working installation of the Ceph librados
+development files is required. On systems with apt-get, this can be acquired
+like so:
+
+```bash
+wget -q -O- 'https://download.ceph.com/keys/release.asc' | sudo apt-key add -
+sudo apt-add-repository 'deb https://download.ceph.com/debian-luminous/ `lsb_release -sc` main'
+sudo apt-get update
+sudo apt-get install librados-dev
+```
+
+*N.B. `luminous` is the current Ceph release. This library will not work
+correctly or as expected with earlier releases of Ceph/librados (Jewel or
+earlier; Kraken is fine.)*
+
+For more information on installing Ceph packages, see [the Ceph documentation](http://docs.ceph.com/docs/master/install/get-packages/).
+
 # Examples
 
 ## Connecting to a cluster
