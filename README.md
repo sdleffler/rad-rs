@@ -1,3 +1,4 @@
+[![Build Status](https://travis-ci.org/sdleffler/rad-rs.svg?branch=master)](https://travis-ci.org/sdleffler/rad-rs)
 [![Docs Status](https://docs.rs/rad/badge.svg)](https://docs.rs/rad)
 [![On crates.io](https://img.shields.io/crates/v/rad.svg)](https://crates.io/crates/rad)
 
