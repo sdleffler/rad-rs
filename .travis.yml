@@ -1,4 +1,5 @@
-sudo: false
+dist: trusty
+sudo: required
 language: rust
 rust:
   - stable
@@ -6,6 +7,6 @@ rust:
   - nightly
 before_install:
   - curl https://download.ceph.com/keys/release.asc | sudo apt-key add -
-  - sudo apt-add-repository 'deb https://download.ceph.com/debian-luminous/ xenial main'
+  - sudo apt-add-repository 'deb https://download.ceph.com/debian-luminous/ trusty main'
   - sudo apt-get -qq update
   - sudo apt-get install librados-dev
