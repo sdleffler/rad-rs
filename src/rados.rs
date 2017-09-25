@@ -11,9 +11,9 @@
 //! # extern crate rad;
 //! # fn dummy() -> ::rad::errors::Result<()> {
 //! use std::path::Path;
-//! use rad::RadosConnectionBuilder;
+//! use rad::ConnectionBuilder;
 //!
-//! let mut cluster = RadosConnectionBuilder::with_user("admin")?
+//! let mut cluster = ConnectionBuilder::with_user("admin")?
 //!                   .read_conf_file(Path::new("/etc/ceph/ceph.conf"))?
 //!                   .conf_set("keyring", "/etc/ceph/ceph.client.admin.keyring")?
 //!                   .connect()?;
@@ -32,7 +32,6 @@ use ceph_rust::rados::{self, rados_t, rados_ioctx_t, rados_completion_t,
 use chrono::{DateTime, Local, TimeZone};
 use ffi_pool::CStringPool;
 use futures::prelude::*;
-use futures::future::{Map, Then};
 use libc;
 use stable_deref_trait::StableDeref;
 
@@ -49,24 +48,24 @@ lazy_static! {
 
 /// A wrapper around a `rados_t` providing methods for configuring the connection before finalizing
 /// it.
-pub struct RadosConnectionBuilder {
+pub struct ConnectionBuilder {
     handle: rados_t,
 }
 
 
-impl RadosConnectionBuilder {
+impl ConnectionBuilder {
     /// Start building a new connection. By default the client to connect as is `client.admin`.
-    pub fn new() -> Result<RadosConnectionBuilder> {
+    pub fn new() -> Result<ConnectionBuilder> {
         let mut handle = ptr::null_mut();
 
         errors::librados(unsafe { rados::rados_create(&mut handle, ptr::null()) })?;
 
-        Ok(RadosConnectionBuilder { handle })
+        Ok(ConnectionBuilder { handle })
     }
 
 
     /// Start building a new connection with a specified user.
-    pub fn with_user(user: &str) -> Result<RadosConnectionBuilder> {
+    pub fn with_user(user: &str) -> Result<ConnectionBuilder> {
         let user_cstr = POOL.get_str(user)?;
         let mut handle = ptr::null_mut();
 
@@ -76,12 +75,12 @@ impl RadosConnectionBuilder {
 
         mem::drop(user_cstr);
 
-        Ok(RadosConnectionBuilder { handle })
+        Ok(ConnectionBuilder { handle })
     }
 
 
     /// Read a configuration file from a given path.
-    pub fn read_conf_file(self, path: &Path) -> Result<RadosConnectionBuilder> {
+    pub fn read_conf_file(self, path: &Path) -> Result<ConnectionBuilder> {
         let path_cstr = POOL.get_str(&path.to_string_lossy())?;
 
         errors::librados(unsafe {
@@ -94,7 +93,7 @@ impl RadosConnectionBuilder {
 
     /// Set an individual configuration option. Useful options include `keyring` if you are trying
     /// to set up Ceph without storing everything inside `/etc/ceph`.
-    pub fn conf_set(self, option: &str, value: &str) -> Result<RadosConnectionBuilder> {
+    pub fn conf_set(self, option: &str, value: &str) -> Result<ConnectionBuilder> {
         let option_cstr = POOL.get_str(option)?;
         let value_cstr = POOL.get_str(value)?;
 
@@ -107,10 +106,10 @@ impl RadosConnectionBuilder {
 
 
     /// Finish building the connection configuration and connect to the cluster.
-    pub fn connect(self) -> Result<RadosConnection> {
+    pub fn connect(self) -> Result<Connection> {
         errors::librados(unsafe { rados::rados_connect(self.handle) })?;
 
-        Ok(RadosConnection {
+        Ok(Connection {
             _dummy: ptr::null(),
             conn: Arc::new(RadosHandle { handle: self.handle }),
         })
@@ -155,7 +154,7 @@ impl Drop for RadosHandle {
 // references against the underlying connection, because if the underlying connection is shut down,
 // the I/O contexts become invalid [citation needed]. As such, we give I/O contexts
 // `Arc<RadosHandle>`s, which are never actually accessed but instead only used for the reference
-// count. The actual `RadosConnection` struct - which *does* call functions on the underlying
+// count. The actual `Connection` struct - which *does* call functions on the underlying
 // `RadosHandle` and `rados_t` - is neither `Clone` nor `Sync`. Thus, since the underlying
 // `rados_t` will only ever be accessed single-threadedly (as it is *never* accessed through the
 // references kept in I/O contexts) it is completely safe to give it `Send` and `Sync`
@@ -165,12 +164,12 @@ unsafe impl Sync for RadosHandle {}
 
 
 /// A wrapper over a connection to a Ceph cluster.
-pub struct RadosConnection {
+pub struct Connection {
     // Since opt-in builtin traits are not yet stable, use of a dummy pointer will prevent
-    // `RadosConnection` from being `Sync`.
+    // `Connection` from being `Sync`.
     _dummy: *const (),
 
-    // Although `RadosConnection` isn't cloneable, since we still need to reference-count the
+    // Although `Connection` isn't cloneable, since we still need to reference-count the
     // underlying cluster connection handle, we use an `Arc` and on creation of I/O contexts we
     // clone the `Arc` and give a reference to each I/O context. This allows us to `rados_shutdown`
     // the cluster once all references are dropped.
@@ -180,11 +179,11 @@ pub struct RadosConnection {
 
 // OIBITs not yet stable.
 //
-unsafe impl Send for RadosConnection {}
-// impl !Sync for RadosConnection {}
+unsafe impl Send for Connection {}
+// impl !Sync for Connection {}
 
 
-impl RadosConnection {
+impl Connection {
     /// Fetch the stats of the entire cluster, using `rados_cluster_stat`.
     pub fn stat(&mut self) -> Result<RadosClusterStat> {
         let mut cluster_stat = Struct_rados_cluster_stat_t {
@@ -208,7 +207,7 @@ impl RadosConnection {
 
 
     /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create`.
-    pub fn get_pool_context(&mut self, pool_name: &str) -> Result<RadosContext> {
+    pub fn get_pool_context(&mut self, pool_name: &str) -> Result<Context> {
         let pool_name_cstr = POOL.get_str(pool_name)?;
         let mut ioctx_handle = ptr::null_mut();
 
@@ -216,7 +215,7 @@ impl RadosConnection {
             rados::rados_ioctx_create(self.conn.handle, pool_name_cstr.as_ptr(), &mut ioctx_handle)
         })?;
 
-        Ok(RadosContext {
+        Ok(Context {
             _conn: self.conn.clone(),
             handle: ioctx_handle,
         })
@@ -224,7 +223,7 @@ impl RadosConnection {
 
 
     /// Fetch the `rados_ioctx_t` for the relevant pool, using `rados_ioctx_create2`.
-    pub fn get_pool_context_from_id(&mut self, pool_id: u64) -> Result<RadosContext> {
+    pub fn get_pool_context_from_id(&mut self, pool_id: u64) -> Result<Context> {
         let mut ioctx_handle = ptr::null_mut();
 
         errors::librados(unsafe {
@@ -235,7 +234,7 @@ impl RadosConnection {
             )
         })?;
 
-        Ok(RadosContext {
+        Ok(Context {
             _conn: self.conn.clone(),
             handle: ioctx_handle,
         })
@@ -245,29 +244,145 @@ impl RadosConnection {
 
 /// The type of a RADOS AIO operation which has yet to complete.
 #[derive(Debug)]
-pub struct RadosFuture<T> {
-    completion_res: StdResult<Completion<T>, Option<Error>>,
+pub struct UnitFuture {
+    completion_res: StdResult<Completion<()>, Option<Error>>,
 }
 
 
-impl<T> RadosFuture<T> {
-    fn new<F>(data: T, init: F) -> RadosFuture<T>
+impl UnitFuture {
+    fn new<F>(init: F) -> UnitFuture
     where
-        F: Fn(rados_completion_t) -> Result<()>,
+        F: FnOnce(rados_completion_t) -> Result<()>,
     {
-        RadosFuture { completion_res: Completion::new(data, init).map_err(Some) }
+        UnitFuture { completion_res: Completion::new((), init).map_err(Some) }
     }
 }
 
 
-impl<T> Future for RadosFuture<T> {
+impl Future for UnitFuture {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.completion_res.as_mut() {
+            Ok(completion) => completion.poll().map(|async| async.map(|_| ())),
+            Err(error) => Err(error.take().unwrap()),
+        }
+    }
+}
+
+
+#[derive(Debug)]
+pub struct DataFuture<T> {
+    completion_res: StdResult<Completion<T>, Option<Error>>,
+}
+
+
+impl<T> DataFuture<T> {
+    fn new<F>(data: T, init: F) -> DataFuture<T>
+    where
+        F: FnOnce(rados_completion_t) -> Result<()>,
+    {
+        DataFuture { completion_res: Completion::new(data, init).map_err(Some) }
+    }
+}
+
+
+impl<T> Future for DataFuture<T> {
     type Item = T;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.completion_res.as_mut() {
-            Ok(completion) => completion.poll(),
+            Ok(completion) => completion.poll().map(|async| async.map(|ret| ret.data)),
             Err(error) => Err(error.take().unwrap()),
+        }
+    }
+}
+
+
+pub struct ReadFuture<B>
+where
+    B: StableDeref + DerefMut<Target = [u8]>,
+{
+    completion_res: StdResult<Completion<B>, Option<Error>>,
+}
+
+
+impl<B> ReadFuture<B>
+where
+    B: StableDeref + DerefMut<Target = [u8]>,
+{
+    fn new<F>(buf: B, init: F) -> Self
+    where
+        F: FnOnce(rados_completion_t) -> Result<()>,
+    {
+        ReadFuture { completion_res: Completion::new(buf, init).map_err(Some) }
+    }
+}
+
+
+impl<B> Future for ReadFuture<B>
+where
+    B: StableDeref + DerefMut<Target = [u8]>,
+{
+    type Item = (u32, B);
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.completion_res.as_mut() {
+            Ok(completion) => {
+                completion.poll().map(|async| {
+                    async.map(|ret| (ret.value, ret.data))
+                })
+            }
+            Err(error) => Err(error.take().unwrap()),
+        }
+    }
+}
+
+
+pub struct StatFuture {
+    data_future: DataFuture<Box<(u64, libc::time_t)>>,
+}
+
+
+impl Future for StatFuture {
+    type Item = Stat;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.data_future.poll().map(|async| {
+            async.map(|boxed| {
+                let (size, last_modified) = *boxed;
+
+                Stat {
+                    size,
+                    last_modified: Local.timestamp(last_modified, 0),
+                }
+            })
+        })
+    }
+}
+
+
+pub struct ExistsFuture {
+    unit_future: UnitFuture,
+}
+
+
+impl Future for ExistsFuture {
+    type Item = bool;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.unit_future.poll() {
+            Ok(Async::Ready(())) => Ok(Async::Ready(true)),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(Error(ErrorKind::Rados(err_code), _)) if err_code == libc::ENOENT as u32 => {
+                Ok(Async::Ready(false))
+            }
+            Err(err) => Err(err),
         }
     }
 }
@@ -275,32 +390,32 @@ impl<T> Future for RadosFuture<T> {
 
 /// Statistics for a single RADOS object.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RadosStat {
+pub struct Stat {
     pub size: u64,
     pub last_modified: DateTime<Local>,
 }
 
 
 /// A wrapper around a `rados_ioctx_t`, which also counts as a reference to the underlying
-/// `RadosConnection`.
-pub struct RadosContext {
+/// `Connection`.
+pub struct Context {
     _conn: Arc<RadosHandle>,
     handle: rados_ioctx_t,
 }
 
 
-// `RadosContext` is safe to `Send`, but not `Sync`; this is because nothing about the
+// `Context` is safe to `Send`, but not `Sync`; this is because nothing about the
 // `rados_ioctx_t` specifically ties it to the current thread. Thus it is safe to `Send`. However,
 // it is good practice [citation needed] to not use the same `rados_ioctx_t` from different
 // threads; hence `Send` but not `Clone` nor `Sync`.
 //
 // The #ceph-devel IRC channel on OFTC has also confirmed that access to `rados_ioctx_t` should be
 // synchronized, but it is safe to send across threads.
-unsafe impl Send for RadosContext {}
-// !impl Sync for RadosContext {}
+unsafe impl Send for Context {}
+// !impl Sync for Context {}
 
 
-impl Drop for RadosContext {
+impl Drop for Context {
     fn drop(&mut self) {
         unsafe {
             rados::rados_ioctx_destroy(self.handle);
@@ -309,7 +424,7 @@ impl Drop for RadosContext {
 }
 
 
-impl RadosContext {
+impl Context {
     /// Fetch an extended attribute on a given RADOS object using `rados_getxattr`.
     ///
     /// * `size` - the size in bytes of the extended attribute.
@@ -465,7 +580,7 @@ impl RadosContext {
 
 
     /// Get the statistics of a given RADOS object using `rados_stat`.
-    pub fn stat(&mut self, obj: &str) -> Result<RadosStat> {
+    pub fn stat(&mut self, obj: &str) -> Result<Stat> {
         let object_id = POOL.get_str(obj)?;
 
         let mut size = 0;
@@ -477,7 +592,7 @@ impl RadosContext {
 
         mem::drop(object_id);
 
-        Ok(RadosStat {
+        Ok(Stat {
             size,
             last_modified: Local.timestamp(time, 0),
         })
@@ -485,8 +600,8 @@ impl RadosContext {
 
 
     /// Asynchronously write to a RADOS object using `rados_aio_write`.
-    pub fn write_async(&mut self, obj: &str, buf: &[u8], offset: u64) -> RadosFuture<()> {
-        RadosFuture::new((), |completion_handle| {
+    pub fn write_async(&mut self, obj: &str, buf: &[u8], offset: u64) -> UnitFuture {
+        UnitFuture::new(|completion_handle| {
             let object_id = POOL.get_str(obj)?;
 
             errors::librados({
@@ -510,8 +625,8 @@ impl RadosContext {
 
 
     /// Asynchronously append to a RADOS object using `rados_aio_append`.
-    pub fn append_async(&mut self, obj: &str, buf: &[u8]) -> RadosFuture<()> {
-        RadosFuture::new((), |completion_handle| {
+    pub fn append_async(&mut self, obj: &str, buf: &[u8]) -> UnitFuture {
+        UnitFuture::new(|completion_handle| {
             let object_id = POOL.get_str(obj)?;
 
             errors::librados({
@@ -534,8 +649,8 @@ impl RadosContext {
 
 
     /// Asynchronously set the contents of a RADOS object using `rados_aio_write_full`.
-    pub fn write_full_async(&mut self, obj: &str, buf: &[u8]) -> RadosFuture<()> {
-        RadosFuture::new((), |completion_handle| {
+    pub fn write_full_async(&mut self, obj: &str, buf: &[u8]) -> UnitFuture {
+        UnitFuture::new(|completion_handle| {
             let object_id = POOL.get_str(obj)?;
 
             errors::librados({
@@ -558,8 +673,8 @@ impl RadosContext {
 
 
     /// Asynchronously remove a RADOS object from the cluster using `rados_aio_remove`.
-    pub fn remove_async(&mut self, obj: &str) -> RadosFuture<()> {
-        RadosFuture::new((), |completion_handle| {
+    pub fn remove_async(&mut self, obj: &str) -> UnitFuture {
+        UnitFuture::new(|completion_handle| {
             let object_id = POOL.get_str(obj)?;
 
             errors::librados({
@@ -576,14 +691,14 @@ impl RadosContext {
 
 
     /// Asynchronously read from a RADOS object using `rados_aio_read`.
-    pub fn read_async<B>(&mut self, obj: &str, mut buf: B, offset: u64) -> RadosFuture<B>
+    pub fn read_async<B>(&mut self, obj: &str, mut buf: B, offset: u64) -> ReadFuture<B>
     where
         B: StableDeref + DerefMut<Target = [u8]>,
     {
         let buf_ptr = buf.as_mut_ptr() as *mut libc::c_char;
         let buf_len = buf.len();
 
-        RadosFuture::new(buf, |completion_handle| {
+        ReadFuture::new(buf, |completion_handle| {
             let object_id = POOL.get_str(obj)?;
 
             errors::librados(unsafe {
@@ -606,22 +721,12 @@ impl RadosContext {
 
     /// Asynchronously retrieve statistics of a specific object from the cluster using
     /// `rados_aio_stat`.
-    pub fn stat_async(
-        &mut self,
-        obj: &str,
-    ) -> Map<RadosFuture<Box<(u64, libc::time_t)>>, fn(Box<(u64, libc::time_t)>) -> RadosStat> {
-        fn deref_move(boxed: Box<(u64, libc::time_t)>) -> RadosStat {
-            RadosStat {
-                size: boxed.0,
-                last_modified: Local.timestamp(boxed.1, 0),
-            }
-        }
-
+    pub fn stat_async(&mut self, obj: &str) -> StatFuture {
         let mut boxed = Box::new((0, 0));
         let size_ptr = &mut boxed.0 as *mut u64;
         let time_ptr = &mut boxed.1 as *mut libc::time_t;
 
-        RadosFuture::new(boxed, |completion_handle| {
+        let data_future = DataFuture::new(boxed, |completion_handle| {
             let object_id = POOL.get_str(obj)?;
 
             errors::librados(unsafe {
@@ -637,7 +742,9 @@ impl RadosContext {
             mem::drop(object_id);
 
             Ok(())
-        }).map(deref_move)
+        });
+
+        StatFuture { data_future }
     }
 
 
@@ -667,21 +774,8 @@ impl RadosContext {
 
     /// Asynchronously check for object existence by using `rados_aio_stat` and checking for
     /// `ENOENT`.
-    pub fn exists_async(
-        &mut self,
-        obj: &str,
-    ) -> Then<RadosFuture<()>, Result<bool>, fn(Result<()>) -> Result<bool>> {
-        fn catch_enoent(result: Result<()>) -> Result<bool> {
-            match result {
-                Ok(()) => Ok(true),
-                Err(Error(ErrorKind::Rados(err_code), _)) if err_code == libc::ENOENT as u32 => {
-                    Ok(false)
-                }
-                Err(err) => Err(err),
-            }
-        }
-
-        RadosFuture::new((), |completion_handle| {
+    pub fn exists_async(&mut self, obj: &str) -> ExistsFuture {
+        let unit_future = UnitFuture::new(|completion_handle| {
             let object_id = POOL.get_str(obj)?;
 
             errors::librados(unsafe {
@@ -697,7 +791,9 @@ impl RadosContext {
             mem::drop(object_id);
 
             Ok(())
-        }).then(catch_enoent)
+        });
+
+        ExistsFuture { unit_future }
     }
 
 
@@ -715,8 +811,8 @@ impl RadosContext {
 
     /// Construct a future which will complete when all I/O actions on the given context are
     /// complete.
-    pub fn flush_async(&mut self) -> RadosFuture<()> {
-        RadosFuture::new((), |completion_handle| {
+    pub fn flush_async(&mut self) -> UnitFuture {
+        UnitFuture::new(|completion_handle| {
             errors::librados(unsafe {
                 rados::rados_aio_flush_async(self.handle, completion_handle)
             })

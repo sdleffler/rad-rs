@@ -18,7 +18,7 @@ mod integration {
     use std::env;
     use std::sync::Mutex;
 
-    use rad::{self, RadosConnectionBuilder, RadosConnection};
+    use rad::{self, ConnectionBuilder, Connection};
 
 
     lazy_static! {
@@ -26,13 +26,13 @@ mod integration {
     }
 
 
-    fn connect_to_cluster() -> rad::Result<RadosConnection> {
+    fn connect_to_cluster() -> rad::Result<Connection> {
         let ceph = env::current_dir().unwrap().join("tests/ceph");
 
         let ceph_conf = ceph.join("ceph.conf");
         let ceph_keyring = ceph.join("ceph.client.admin.keyring");
 
-        RadosConnectionBuilder::with_user("admin")?
+        ConnectionBuilder::with_user("admin")?
             .read_conf_file(&ceph_conf)?
             .conf_set("keyring", &ceph_keyring.to_string_lossy())?
             .connect()

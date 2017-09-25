@@ -13,6 +13,17 @@ use libc;
 use errors::{self, Error, Result};
 
 
+/// The result of a `Completion`'s successful execution.
+#[derive(Debug)]
+pub struct Return<T> {
+    /// The data previously stored in the `Completion<T>`.
+    pub data: T,
+
+    /// The non-error return value of the RADOS completion.
+    pub value: u32,
+}
+
+
 /// The info struct passed into a RADOS callback, providing a trigger to potentially deallocate
 /// associated data and also an `AtomicTask` object for notifying all registered tasks.
 struct CompletionInfo<T> {
@@ -99,17 +110,18 @@ impl<T> Completion<T> {
 
 
 impl<T> Future for Completion<T> {
-    type Item = T;
+    type Item = Return<T>;
     type Error = Error;
 
-    fn poll(&mut self) -> Poll<T, Error> {
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         // `AtomicTask` should have `.register()` called before a consumer checks for produced data.
         self.task.register();
 
-        errors::librados(unsafe { rados::rados_aio_get_return_value(self.handle) })?;
+        let value =
+            errors::librados_res(unsafe { rados::rados_aio_get_return_value(self.handle) })?;
 
         match Arc::try_unwrap(self.data.take().unwrap()) {
-            Ok(data) => Ok(Async::Ready(data)),
+            Ok(data) => Ok(Async::Ready(Return { value, data })),
             Err(arc) => {
                 self.data = Some(arc);
                 Ok(Async::NotReady)

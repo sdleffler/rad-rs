@@ -98,7 +98,9 @@ fn read_write_remove_async() {
                             println!("Existence of {} asserted, beginning data check", name);
                             pool.read_async(name, vec![0u8; data.len()], 0)
                                 .and_then(move |buf| {
-                                    assert!(&buf == data);
+                                    // TODO: Implement asynchronous full-read operation.
+                                    assert!(buf.0 as usize == data.len());
+                                    assert!(&buf.1 == data);
                                     println!("Data equality asserted, beginning removal of {}", name);
                                     pool.remove_async(name).and_then(move |()| {
                                         println!("Finished removal, asserting inexistence of {}", name);
