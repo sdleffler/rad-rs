@@ -35,20 +35,20 @@ The following shows how to connect to a RADOS cluster, by providing a path to a
 `ceph.conf` file, a path to the `client.admin` keyring, and requesting to
 connect with the `admin` user. This API bares little resemblance to the
 bare-metal librados API, but it *is* easy to trace what's happening under the
-hood: `RadosConnectionBuilder::with_user` or `RadosConnectionBuilder::new`
+hood: `ConnectionBuilder::with_user` or `ConnectionBuilder::new`
 allocates a new `rados_t`. `read_conf_file` calls `rados_conf_read_file`,
 `conf_set` calls `rados_conf_set`, and `connect` calls `rados_connect`.
 
 ```rust
-use rad::RadosConnectionBuilder;
+use rad::ConnectionBuilder;
 
-let cluster = RadosConnectionBuilder::with_user("admin").unwrap()
+let cluster = ConnectionBuilder::with_user("admin").unwrap()
     .read_conf_file("/etc/ceph.conf").unwrap()
     .conf_set("keyring", "/etc/ceph.client.admin.keyring").unwrap()
     .connect()?;
 ```
 
-The type returned from `.connect()` is a `RadosCluster` handle, which is a wrapper around a `rados_t` which guarantees a `rados_shutdown` on the connection when dropped.
+The type returned from `.connect()` is a `Cluster` handle, which is a wrapper around a `rados_t` which guarantees a `rados_shutdown` on the connection when dropped.
 
 ## Writing a file to a cluster with synchronous I/O
 
@@ -56,9 +56,9 @@ The type returned from `.connect()` is a `RadosCluster` handle, which is a wrapp
 use std::fs::File;
 use std::io::Read;
 
-use rad::RadosConnectionBuilder;
+use rad::ConnectionBuilder;
 
-let cluster = RadosConnectionBuilder::with_user("admin")?
+let cluster = ConnectionBuilder::with_user("admin")?
     .read_conf_file("/etc/ceph.conf")?
     .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
     .connect()?;
@@ -94,11 +94,11 @@ use std::io::Read;
 
 use rand::{Rng, SeedableRng, XorShiftRng};
 
-use rad::RadosConnectionBuilder;
+use rad::ConnectionBuilder;
 
 const NUM_OBJECTS: usize = 8;
 
-let cluster = RadosConnectionBuilder::with_user("admin")?
+let cluster = ConnectionBuilder::with_user("admin")?
     .read_conf_file("/etc/ceph.conf")?
     .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
     .connect()?;
