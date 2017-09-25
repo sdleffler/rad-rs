@@ -111,7 +111,7 @@ impl ConnectionBuilder {
 
         Ok(Connection {
             _dummy: ptr::null(),
-            conn: Arc::new(RadosHandle { handle: self.handle }),
+            conn: Arc::new(ClusterHandle { handle: self.handle }),
         })
     }
 }
@@ -120,7 +120,7 @@ impl ConnectionBuilder {
 /// Statistics for a Ceph cluster: total storage in kilobytes, the amount of storage used in
 /// kilobytes, the amount of available storage in kilobytes, and the number of stored objects.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RadosClusterStat {
+pub struct ClusterStat {
     pub kb: u64,
     pub kb_used: u64,
     pub kb_avail: u64,
@@ -133,34 +133,18 @@ pub struct RadosClusterStat {
 ///
 /// On drop, `rados_shutdown` is called on the wrapped `rados_t`.
 #[derive(Clone)]
-struct RadosHandle {
+struct ClusterHandle {
     handle: rados_t,
 }
 
 
-impl Drop for RadosHandle {
+impl Drop for ClusterHandle {
     fn drop(&mut self) {
         unsafe {
             rados::rados_shutdown(self.handle);
         }
     }
 }
-
-
-// `Send` and `Sync` are unsafely implemented for `RadosHandle` because it is only ever *used* in a
-// thread-safe manner, and needs to be able to be sent across threads. The rationale for this is as
-// follows: we wish to (atomically) reference-count the handle for the connection to the Ceph
-// cluster, so that we can call `rados_shutdown` on it as necessary. RADOS I/O contexts count as
-// references against the underlying connection, because if the underlying connection is shut down,
-// the I/O contexts become invalid [citation needed]. As such, we give I/O contexts
-// `Arc<RadosHandle>`s, which are never actually accessed but instead only used for the reference
-// count. The actual `Connection` struct - which *does* call functions on the underlying
-// `RadosHandle` and `rados_t` - is neither `Clone` nor `Sync`. Thus, since the underlying
-// `rados_t` will only ever be accessed single-threadedly (as it is *never* accessed through the
-// references kept in I/O contexts) it is completely safe to give it `Send` and `Sync`
-// capabilities.
-unsafe impl Send for RadosHandle {}
-unsafe impl Sync for RadosHandle {}
 
 
 /// A wrapper over a connection to a Ceph cluster.
@@ -173,7 +157,7 @@ pub struct Connection {
     // underlying cluster connection handle, we use an `Arc` and on creation of I/O contexts we
     // clone the `Arc` and give a reference to each I/O context. This allows us to `rados_shutdown`
     // the cluster once all references are dropped.
-    conn: Arc<RadosHandle>,
+    conn: Arc<ClusterHandle>,
 }
 
 
@@ -185,7 +169,7 @@ unsafe impl Send for Connection {}
 
 impl Connection {
     /// Fetch the stats of the entire cluster, using `rados_cluster_stat`.
-    pub fn stat(&mut self) -> Result<RadosClusterStat> {
+    pub fn stat(&mut self) -> Result<ClusterStat> {
         let mut cluster_stat = Struct_rados_cluster_stat_t {
             kb: 0,
             kb_used: 0,
@@ -197,7 +181,7 @@ impl Connection {
             rados::rados_cluster_stat(self.conn.handle, &mut cluster_stat)
         })?;
 
-        Ok(RadosClusterStat {
+        Ok(ClusterStat {
             kb: cluster_stat.kb,
             kb_used: cluster_stat.kb_used,
             kb_avail: cluster_stat.kb_avail,
@@ -399,7 +383,7 @@ pub struct Stat {
 /// A wrapper around a `rados_ioctx_t`, which also counts as a reference to the underlying
 /// `Connection`.
 pub struct Context {
-    _conn: Arc<RadosHandle>,
+    _conn: Arc<ClusterHandle>,
     handle: rados_ioctx_t,
 }
 
