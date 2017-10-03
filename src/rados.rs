@@ -117,8 +117,13 @@ impl ConnectionBuilder {
 }
 
 
-/// Statistics for a Ceph cluster: total storage in kilobytes, the amount of storage used in
-/// kilobytes, the amount of available storage in kilobytes, and the number of stored objects.
+/// Statistics for a Ceph cluster: total storage in kibibytes, the amount of storage used in
+/// kibibytes, the amount of available storage in kibibytes, and the number of stored objects.
+///
+/// Note that yes, these are [kibibytes](https://en.wikipedia.org/wiki/Kibibyte), not
+/// [kilobytes](https://en.wikipedia.org/wiki/Kilobyte)! Kilo/mega/giga/terabytes are measured in
+/// powers of ten, so a kilobyte is literally a thousand bytes, a megabyte is a million bytes, and
+/// so forth. A kibibyte, however, is `2^10` bytes, a mebibyte is `2^20` bytes, and so on.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ClusterStat {
     pub kb: u64,
