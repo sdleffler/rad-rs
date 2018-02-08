@@ -27,7 +27,7 @@ use std::ptr;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 
-use ceph_rust::rados::{self, rados_completion_t, rados_ioctx_t, rados_t,
+use ceph::rados::{self, rados_completion_t, rados_ioctx_t, rados_t,
                        Struct_rados_cluster_stat_t};
 use chrono::{DateTime, Local, TimeZone};
 use ffi_pool::CStringPool;

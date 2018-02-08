@@ -5,7 +5,7 @@ use std::mem;
 use std::ptr;
 use std::sync::Arc;
 
-use ceph_rust::rados::{self, rados_completion_t};
+use ceph::rados::{self, rados_completion_t};
 use futures::{Async, Future, Poll};
 use futures::task::AtomicTask;
 use libc;

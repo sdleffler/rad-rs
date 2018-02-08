@@ -111,7 +111,7 @@
 
 #![recursion_limit = "1024"]
 
-extern crate ceph_rust;
+extern crate ceph;
 extern crate chrono;
 #[macro_use]
 extern crate error_chain;
