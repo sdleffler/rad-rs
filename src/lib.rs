@@ -133,8 +133,8 @@ macro_rules! c {
 }
 
 mod async;
-pub mod errors;
-pub mod rados;
+mod errors;
+mod rados;
 
 pub use errors::*;
-pub use rados::{Connection, ConnectionBuilder, Context, Stat};
+pub use rados::*;
