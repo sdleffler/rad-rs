@@ -9,7 +9,7 @@
 //!
 //! ```rust,no_run
 //! # extern crate rad;
-//! # fn dummy() -> ::rad::errors::Result<()> {
+//! # fn dummy() -> ::rad::Result<()> {
 //! use std::path::Path;
 //! use rad::ConnectionBuilder;
 //!

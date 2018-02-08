@@ -22,7 +22,7 @@
 //! use std::path::Path;
 //!
 //! use rad::ConnectionBuilder;
-//! # fn dummy() -> ::rad::errors::Result<()> {
+//! # fn dummy() -> ::rad::Result<()> {
 //!
 //! let cluster = ConnectionBuilder::with_user("admin")?
 //!     .read_conf_file(Path::new("/etc/ceph.conf"))?
@@ -35,7 +35,7 @@
 //!
 //! ```rust,no_run
 //! # extern crate rad;
-//! # fn dummy() -> ::rad::errors::Result<()> {
+//! # fn dummy() -> ::rad::Result<()> {
 //! use std::fs::File;
 //! use std::io::Read;
 //! use std::path::Path;
@@ -73,7 +73,7 @@
 //! # extern crate futures;
 //! # extern crate rad;
 //! # extern crate rand;
-//! # fn dummy() -> ::rad::errors::Result<()> {
+//! # fn dummy() -> ::rad::Result<()> {
 //! use std::path::Path;
 //! use std::io::Read;
 //!
