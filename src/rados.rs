@@ -27,8 +27,7 @@ use std::ptr;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 
-use ceph::rados::{self, rados_completion_t, rados_ioctx_t, rados_t,
-                       Struct_rados_cluster_stat_t};
+use ceph::rados::{self, rados_completion_t, rados_ioctx_t, rados_t, Struct_rados_cluster_stat_t};
 use chrono::{DateTime, Local, TimeZone};
 use ffi_pool::CStringPool;
 use futures::prelude::*;
@@ -46,6 +45,7 @@ lazy_static! {
 
 /// A wrapper around a `rados_t` providing methods for configuring the connection before finalizing
 /// it.
+#[derive(Debug)]
 pub struct ConnectionBuilder {
     handle: rados_t,
 }
@@ -126,7 +126,7 @@ pub struct ClusterStat {
 /// cluster.
 ///
 /// On drop, `rados_shutdown` is called on the wrapped `rados_t`.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct ClusterHandle {
     handle: rados_t,
 }
@@ -140,6 +140,7 @@ impl Drop for ClusterHandle {
 }
 
 /// A wrapper over a connection to a Ceph cluster.
+#[derive(Debug)]
 pub struct Connection {
     // Since opt-in builtin traits are not yet stable, use of a dummy pointer will prevent
     // `Connection` from being `Sync`.
@@ -270,6 +271,7 @@ impl<T> Future for DataFuture<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct ReadFuture<B>
 where
     B: StableDeref + DerefMut<Target = [u8]>,
@@ -308,6 +310,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct StatFuture {
     data_future: DataFuture<Box<(u64, libc::time_t)>>,
 }
@@ -330,6 +333,7 @@ impl Future for StatFuture {
     }
 }
 
+#[derive(Debug)]
 pub struct ExistsFuture {
     unit_future: UnitFuture,
 }
@@ -359,6 +363,7 @@ pub struct Stat {
 
 /// A wrapper around a `rados_ioctx_t`, which also counts as a reference to the underlying
 /// `Connection`.
+#[derive(Debug)]
 pub struct Context {
     _conn: Arc<ClusterHandle>,
     handle: rados_ioctx_t,
