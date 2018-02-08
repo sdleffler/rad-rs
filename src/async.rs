@@ -12,7 +12,6 @@ use libc;
 
 use errors::{self, Error, Result};
 
-
 /// The result of a `Completion`'s successful execution.
 #[derive(Debug)]
 pub struct Return<T> {
@@ -23,14 +22,12 @@ pub struct Return<T> {
     pub value: u32,
 }
 
-
 /// The info struct passed into a RADOS callback, providing a trigger to potentially deallocate
 /// associated data and also an `AtomicTask` object for notifying all registered tasks.
 struct CompletionInfo<T> {
     task: Arc<AtomicTask>,
     data: Arc<T>,
 }
-
 
 /// The callback passed into librados, and called on future completion.
 extern "C" fn callback<T>(_handle: rados_completion_t, info_ptr: *mut libc::c_void) {
@@ -46,7 +43,6 @@ extern "C" fn callback<T>(_handle: rados_completion_t, info_ptr: *mut libc::c_vo
     task.notify();
 }
 
-
 /// The type of a wrapped `rados_completion_t`, with associated allocated custom data and
 /// `AtomicTask`. This is a bare-metal `RadosFuture`.
 #[derive(Debug)]
@@ -55,7 +51,6 @@ pub struct Completion<T> {
     data: Option<Arc<T>>,
     handle: rados_completion_t,
 }
-
 
 impl<T> Completion<T> {
     /// Construct a new `Completion` from a piece of data and an initialization function. The
@@ -90,13 +85,11 @@ impl<T> Completion<T> {
         })?;
 
         match init(completion_handle) {
-            Ok(()) => {
-                Ok(Completion {
-                    task,
-                    data: Some(data),
-                    handle: completion_handle,
-                })
-            }
+            Ok(()) => Ok(Completion {
+                task,
+                data: Some(data),
+                handle: completion_handle,
+            }),
             Err(error) => {
                 unsafe {
                     rados::rados_aio_release(completion_handle);
@@ -107,7 +100,6 @@ impl<T> Completion<T> {
         }
     }
 }
-
 
 impl<T> Future for Completion<T> {
     type Item = Return<T>;
@@ -130,7 +122,6 @@ impl<T> Future for Completion<T> {
     }
 }
 
-
 impl<T> Drop for Completion<T> {
     fn drop(&mut self) {
         unsafe {
@@ -138,7 +129,6 @@ impl<T> Drop for Completion<T> {
         }
     }
 }
-
 
 /// Conceptually, the `T` is only ever accessed from this `Completion`. Even when dropped, the
 /// `T` is never accessed in a concurrent manner; and thus if `T` is `Send`, `Completion<T>`

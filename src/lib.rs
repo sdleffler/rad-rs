@@ -122,9 +122,7 @@ extern crate lazy_static;
 extern crate libc;
 extern crate stable_deref_trait;
 
-
 pub use stable_deref_trait::StableDeref;
-
 
 #[macro_export]
 macro_rules! c {
@@ -134,10 +132,9 @@ macro_rules! c {
     };
 }
 
-
 mod async;
 pub mod errors;
 pub mod rados;
 
 pub use errors::*;
-pub use rados::{ConnectionBuilder, Connection, Context, Stat};
+pub use rados::{Connection, ConnectionBuilder, Context, Stat};
