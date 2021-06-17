@@ -2,14 +2,17 @@
 //! for asynchronous RADOS operations.
 
 use std::mem;
+use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
+use std::task::Context;
 
 use ceph::rados::{self, rados_completion_t};
-use futures::task::AtomicTask;
-use futures::{Async, Future, Poll};
+use futures::task::AtomicWaker;
+use std::future::Future;
+use std::task::Poll;
 
-use crate::errors::{self, Error, Result};
+use crate::errors::{self, Result};
 
 /// The result of a `Completion`'s successful execution.
 #[derive(Debug)]
@@ -22,9 +25,9 @@ pub struct Return<T> {
 }
 
 /// The info struct passed into a RADOS callback, providing a trigger to potentially deallocate
-/// associated data and also an `AtomicTask` object for notifying all registered tasks.
+/// associated data and also an `AtomicWaker` object for notifying all registered tasks.
 struct CompletionInfo<T> {
-    task: Arc<AtomicTask>,
+    task: Arc<AtomicWaker>,
     data: Arc<T>,
 }
 
@@ -36,17 +39,17 @@ extern "C" fn callback<T>(_handle: rados_completion_t, info_ptr: *mut libc::c_vo
     // Allow a poll to unwrap the contained data.
     mem::drop(data);
 
-    // `AtomicTask` should be notified *after* data is produced. Data is produced, here, by
+    // `AtomicWaker` should be notified *after* data is produced. Data is produced, here, by
     // reducing the strong reference count of the `data: Arc<T>` to `1`, and thus allowing a
     // successful `.poll()` to `Arc::try_unwrap()` the data.
-    task.notify();
+    task.wake();
 }
 
 /// The type of a wrapped `rados_completion_t`, with associated allocated custom data and
-/// `AtomicTask`. This is a bare-metal `RadosFuture`.
+/// `AtomicWaker`. This is a bare-metal `RadosFuture`.
 #[derive(Debug)]
 pub struct Completion<T> {
-    task: Arc<AtomicTask>,
+    task: Arc<AtomicWaker>,
     data: Option<Arc<T>>,
     handle: rados_completion_t,
 }
@@ -62,7 +65,7 @@ impl<T> Completion<T> {
     {
         let mut completion_handle = ptr::null_mut();
 
-        let task = Arc::new(AtomicTask::new());
+        let task = Arc::new(AtomicWaker::new());
         let data = Arc::new(data);
 
         let info_ptr = Box::into_raw(Box::new(CompletionInfo {
@@ -100,22 +103,23 @@ impl<T> Completion<T> {
     }
 }
 
-impl<T> Future for Completion<T> {
-    type Item = Return<T>;
-    type Error = Error;
+impl<T> Unpin for Completion<T> {}
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        // `AtomicTask` should have `.register()` called before a consumer checks for produced data.
-        self.task.register();
+impl<T> Future for Completion<T> {
+    type Output = Result<Return<T>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // `AtomicWaker` should have `.register()` called before a consumer checks for produced data.
+        self.task.register(cx.waker());
 
         let value =
             errors::librados_res(unsafe { rados::rados_aio_get_return_value(self.handle) })?;
 
         match Arc::try_unwrap(self.data.take().unwrap()) {
-            Ok(data) => Ok(Async::Ready(Return { value, data })),
+            Ok(data) => Poll::Ready(Ok(Return { value, data })),
             Err(arc) => {
                 self.data = Some(arc);
-                Ok(Async::NotReady)
+                Poll::Pending
             }
         }
     }
