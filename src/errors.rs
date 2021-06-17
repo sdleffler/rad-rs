@@ -1,7 +1,5 @@
 use std::ffi::CStr;
 
-use libc;
-
 error_chain! {
     types {
         Error, ErrorKind, ResultExt, Result;

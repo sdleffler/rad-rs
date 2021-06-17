@@ -20,8 +20,8 @@
 //! # Ok(()) } fn main() {}
 //! ```
 
-use std::ops::DerefMut;
 use std::mem;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::ptr;
 use std::result::Result as StdResult;
@@ -31,11 +31,10 @@ use ceph::rados::{self, rados_completion_t, rados_ioctx_t, rados_t, Struct_rados
 use chrono::{DateTime, Local, TimeZone};
 use ffi_pool::CStringPool;
 use futures::prelude::*;
-use libc;
 use stable_deref_trait::StableDeref;
 
-use asynchronous::Completion;
-use errors::{self, Error, ErrorKind, Result};
+use crate::asynchronous::Completion;
+use crate::errors::{self, Error, ErrorKind, Result};
 
 lazy_static! {
     /// A pool of `CString`s used for converting Rust strings which need to be passed into
@@ -237,7 +236,7 @@ impl Future for UnitFuture {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.completion_res.as_mut() {
-            Ok(completion) => completion.poll().map(|async| async.map(|_| ())),
+            Ok(completion) => completion.poll().map(|res| res.map(|_| ())),
             Err(error) => Err(error.take().unwrap()),
         }
     }
@@ -265,7 +264,7 @@ impl<T> Future for DataFuture<T> {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.completion_res.as_mut() {
-            Ok(completion) => completion.poll().map(|async| async.map(|ret| ret.data)),
+            Ok(completion) => completion.poll().map(|res| res.map(|ret| ret.data)),
             Err(error) => Err(error.take().unwrap()),
         }
     }
@@ -304,7 +303,7 @@ where
         match self.completion_res.as_mut() {
             Ok(completion) => completion
                 .poll()
-                .map(|async| async.map(|ret| (ret.value, ret.data))),
+                .map(|res| res.map(|ret| (ret.value, ret.data))),
             Err(error) => Err(error.take().unwrap()),
         }
     }
@@ -320,8 +319,8 @@ impl Future for StatFuture {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.data_future.poll().map(|async| {
-            async.map(|boxed| {
+        self.data_future.poll().map(|res| {
+            res.map(|boxed| {
                 let (size, last_modified) = *boxed;
 
                 Stat {

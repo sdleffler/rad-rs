@@ -6,11 +6,10 @@ use std::ptr;
 use std::sync::Arc;
 
 use ceph::rados::{self, rados_completion_t};
-use futures::{Async, Future, Poll};
 use futures::task::AtomicTask;
-use libc;
+use futures::{Async, Future, Poll};
 
-use errors::{self, Error, Result};
+use crate::errors::{self, Error, Result};
 
 /// The result of a `Completion`'s successful execution.
 #[derive(Debug)]
