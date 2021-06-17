@@ -34,7 +34,7 @@ use futures::prelude::*;
 use libc;
 use stable_deref_trait::StableDeref;
 
-use async::Completion;
+use asynchronous::Completion;
 use errors::{self, Error, ErrorKind, Result};
 
 lazy_static! {

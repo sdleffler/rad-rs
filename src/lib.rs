@@ -127,12 +127,15 @@ pub use stable_deref_trait::StableDeref;
 #[macro_export]
 macro_rules! c {
     ($s:expr) => {
-        CString::new($s)
-            .expect(concat!("Could not convert `", $s, "` to an FFI-compatible CString!"))
+        CString::new($s).expect(concat!(
+            "Could not convert `",
+            $s,
+            "` to an FFI-compatible CString!"
+        ))
     };
 }
 
-mod async;
+mod asynchronous;
 mod errors;
 mod rados;
 
