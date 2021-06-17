@@ -15,7 +15,7 @@ error_chain! {
         FromBytesWithNul(::std::ffi::FromBytesWithNulError);
         IntoString(::std::ffi::IntoStringError);
         Utf8(::std::str::Utf8Error);
-        IO(::std::io::Error);
+        Io(::std::io::Error);
     }
 
     errors {
