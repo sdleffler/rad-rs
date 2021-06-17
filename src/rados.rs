@@ -20,22 +20,25 @@
 //! # Ok(()) } fn main() {}
 //! ```
 
-use std::ops::DerefMut;
+use futures::ready;
+use std::marker::Unpin;
 use std::mem;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::ptr;
 use std::result::Result as StdResult;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 
 use ceph::rados::{self, rados_completion_t, rados_ioctx_t, rados_t, Struct_rados_cluster_stat_t};
 use chrono::{DateTime, Local, TimeZone};
 use ffi_pool::CStringPool;
 use futures::prelude::*;
-use libc;
 use stable_deref_trait::StableDeref;
+use std::pin::Pin;
 
-use async::Completion;
-use errors::{self, Error, ErrorKind, Result};
+use crate::asynchronous::Completion;
+use crate::errors::{self, Error, ErrorKind, Result};
 
 lazy_static! {
     /// A pool of `CString`s used for converting Rust strings which need to be passed into
@@ -220,6 +223,8 @@ pub struct UnitFuture {
     completion_res: StdResult<Completion<()>, Option<Error>>,
 }
 
+impl Unpin for UnitFuture {}
+
 impl UnitFuture {
     fn new<F>(init: F) -> UnitFuture
     where
@@ -232,13 +237,12 @@ impl UnitFuture {
 }
 
 impl Future for UnitFuture {
-    type Item = ();
-    type Error = Error;
+    type Output = StdResult<(), Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         match self.completion_res.as_mut() {
-            Ok(completion) => completion.poll().map(|async| async.map(|_| ())),
-            Err(error) => Err(error.take().unwrap()),
+            Ok(completion) => completion.poll_unpin(cx).map(|res| res.map(|_| ())),
+            Err(error) => Poll::Ready(Err(error.take().unwrap())),
         }
     }
 }
@@ -260,13 +264,12 @@ impl<T> DataFuture<T> {
 }
 
 impl<T> Future for DataFuture<T> {
-    type Item = T;
-    type Error = Error;
+    type Output = StdResult<T, Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         match self.completion_res.as_mut() {
-            Ok(completion) => completion.poll().map(|async| async.map(|ret| ret.data)),
-            Err(error) => Err(error.take().unwrap()),
+            Ok(completion) => completion.poll_unpin(cx).map(|res| res.map(|ret| ret.data)),
+            Err(error) => Poll::Ready(Err(error.take().unwrap())),
         }
     }
 }
@@ -297,15 +300,14 @@ impl<B> Future for ReadFuture<B>
 where
     B: StableDeref + DerefMut<Target = [u8]>,
 {
-    type Item = (u32, B);
-    type Error = Error;
+    type Output = StdResult<(u32, B), Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         match self.completion_res.as_mut() {
             Ok(completion) => completion
-                .poll()
-                .map(|async| async.map(|ret| (ret.value, ret.data))),
-            Err(error) => Err(error.take().unwrap()),
+                .poll_unpin(cx)
+                .map(|res| res.map(|ret| (ret.value, ret.data))),
+            Err(error) => Poll::Ready(Err(error.take().unwrap())),
         }
     }
 }
@@ -315,13 +317,14 @@ pub struct StatFuture {
     data_future: DataFuture<Box<(u64, libc::time_t)>>,
 }
 
-impl Future for StatFuture {
-    type Item = Stat;
-    type Error = Error;
+impl Unpin for StatFuture {}
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.data_future.poll().map(|async| {
-            async.map(|boxed| {
+impl Future for StatFuture {
+    type Output = StdResult<Stat, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        self.data_future.poll_unpin(cx).map(|res| {
+            res.map(|boxed| {
                 let (size, last_modified) = *boxed;
 
                 Stat {
@@ -338,19 +341,19 @@ pub struct ExistsFuture {
     unit_future: UnitFuture,
 }
 
-impl Future for ExistsFuture {
-    type Item = bool;
-    type Error = Error;
+impl Unpin for ExistsFuture {}
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.unit_future.poll() {
-            Ok(Async::Ready(())) => Ok(Async::Ready(true)),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
+impl Future for ExistsFuture {
+    type Output = StdResult<bool, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        Poll::Ready(match ready!(self.unit_future.poll_unpin(cx)) {
+            Ok(()) => Ok(true),
             Err(Error(ErrorKind::Rados(err_code), _)) if err_code == libc::ENOENT as u32 => {
-                Ok(Async::Ready(false))
+                Ok(false)
             }
             Err(err) => Err(err),
-        }
+        })
     }
 }
 

@@ -70,44 +70,35 @@
 //! ### Asynchronous cluster I/O
 //!
 //! ```rust,no_run
-//! # extern crate futures;
-//! # extern crate rad;
-//! # extern crate rand;
-//! # fn dummy() -> ::rad::Result<()> {
+//! use std::ops::DerefMut;
 //! use std::path::Path;
-//! use std::io::Read;
-//!
-//! use futures::prelude::*;
-//! use futures::stream;
-//! use rand::{Rng, SeedableRng, XorShiftRng};
-//!
-//! use rad::ConnectionBuilder;
-//!
-//! const NUM_OBJECTS: usize = 8;
-//!
-//! let mut cluster = ConnectionBuilder::with_user("admin")?
-//!     .read_conf_file(Path::new("/etc/ceph.conf"))?
-//!     .conf_set("keyring", "/etc/ceph.client.admin.keyring")?
-//!     .connect()?;
-//!
-//! let mut pool = cluster.get_pool_context("rbd")?;
-//!
-//! stream::iter_ok((0..NUM_OBJECTS)
-//!     .map(|i| {
-//!         let bytes = XorShiftRng::from_seed([i as u32 + 1, 2, 3, 4])
-//!             .gen_iter::<u8>()
-//!             .take(1 << 16)
-//!             .collect::<Vec<u8>>();
-//!
-//!         let name = format!("object-{}", i);
-//!
-//!         pool.write_full_async(&name, &bytes)
-//!     }))
-//!     .buffer_unordered(NUM_OBJECTS)
-//!     .collect()
-//!     .wait()?;
-//! # Ok(()) } fn main() {}
-//! ```
+
+//! use rad::{ConnectionBuilder, Error};
+//! use tokio;
+
+//! #[tokio::main]
+//! async fn main() -> Result<(), Error> {
+//!     let mut cluster = ConnectionBuilder::with_user("admin")?
+//!         .read_conf_file(Path::new("ceph.conf"))?
+//!         .conf_set("keyring", "ceph.key")?
+//!         .connect()?;
+
+//!     let mut pool = cluster.get_pool_context("pool")?;
+
+//!     let mut buf = vec![0u8; 64 * 1024];
+//!     let size = pool
+//!         .read_async(
+//!             "abc",
+//!             buf.deref_mut(),
+//!             0,
+//!         )
+//!         .await?
+//!         .0;
+//!     buf.truncate(size as usize);
+//!     std::fs::write("tmp.file", buf);
+
+//!     Ok(())
+//! }
 
 #![recursion_limit = "1024"]
 
@@ -127,12 +118,15 @@ pub use stable_deref_trait::StableDeref;
 #[macro_export]
 macro_rules! c {
     ($s:expr) => {
-        CString::new($s)
-            .expect(concat!("Could not convert `", $s, "` to an FFI-compatible CString!"))
+        CString::new($s).expect(concat!(
+            "Could not convert `",
+            $s,
+            "` to an FFI-compatible CString!"
+        ))
     };
 }
 
-mod async;
+mod asynchronous;
 mod errors;
 mod rados;
 

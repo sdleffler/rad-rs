@@ -1,7 +1,5 @@
 use std::ffi::CStr;
 
-use libc;
-
 error_chain! {
     types {
         Error, ErrorKind, ResultExt, Result;
@@ -15,7 +13,7 @@ error_chain! {
         FromBytesWithNul(::std::ffi::FromBytesWithNulError);
         IntoString(::std::ffi::IntoStringError);
         Utf8(::std::str::Utf8Error);
-        IO(::std::io::Error);
+        Io(::std::io::Error);
     }
 
     errors {
@@ -49,11 +47,9 @@ pub fn librados_res(err: i32) -> Result<u32> {
 pub fn get_error_string(err: u32) -> Result<String> {
     let error = unsafe {
         let err_str = libc::strerror(err as i32);
-        try!(
-            CStr::from_ptr(err_str)
-                .to_str()
-                .chain_err(|| "while decoding error string",)
-        )
+        CStr::from_ptr(err_str)
+            .to_str()
+            .chain_err(|| "while decoding error string")?
     };
 
     Ok(error.to_string())
